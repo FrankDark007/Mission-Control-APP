@@ -400,3 +400,25 @@ app.get('/api/queue/status', (req, res) => {
   });
 });
 
+
+// --- Facts ingestion (restored) ---
+app.post('/api/facts', async (req, res) => {
+  try {
+    const factsPath = join(process.cwd(), 'ops', 'facts.json');
+    const incomingFacts = req.body || {};
+
+    let existingFacts = {};
+    if (existsSync(factsPath)) {
+      const data = await readFile(factsPath, 'utf8');
+      existingFacts = JSON.parse(data);
+    }
+
+    const mergedFacts = { ...existingFacts, ...incomingFacts };
+    await writeFile(factsPath, JSON.stringify(mergedFacts, null, 2));
+
+    res.json({ ok: true, facts: mergedFacts });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
