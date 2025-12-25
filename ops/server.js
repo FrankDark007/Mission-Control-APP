@@ -433,3 +433,27 @@ app.post('/api/deploy', async (req, res) => {
   }
 });
 
+
+// --- Git automation (restored: safe/read-only) ---
+app.get('/api/git/status', async (req, res) => {
+  try {
+    exec('git status --short', { cwd: process.cwd() }, (err, stdout, stderr) => {
+      if (err) return res.status(500).json({ ok: false, error: stderr || err.message });
+      res.json({ ok: true, status: stdout });
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.get('/api/git/log', async (req, res) => {
+  try {
+    exec('git log --oneline -n 20', { cwd: process.cwd() }, (err, stdout, stderr) => {
+      if (err) return res.status(500).json({ ok: false, error: stderr || err.message });
+      res.json({ ok: true, log: stdout });
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
