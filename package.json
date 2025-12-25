@@ -30,7 +30,10 @@
     "node-cron": "^4.2.1",
     "puppeteer": "^24.34.0",
     "axios": "^1.13.2",
-    "openai": "^6.15.0"
+    "openai": "^6.15.0",
+    "simple-git": "^3.30.0",
+    "chrome-launcher": "^1.2.1",
+    "lighthouse": "^13.0.1"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
