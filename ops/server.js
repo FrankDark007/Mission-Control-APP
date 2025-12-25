@@ -457,3 +457,22 @@ app.get('/api/git/log', async (req, res) => {
   }
 });
 
+
+// --- Lighthouse audit (restored: stub) ---
+app.get('/api/audit/lighthouse', async (req, res) => {
+  try {
+    res.json({
+      ok: true,
+      audit: {
+        performance: null,
+        accessibility: null,
+        seo: null,
+        bestPractices: null,
+        note: 'Lighthouse stub restored; execution to be implemented',
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
