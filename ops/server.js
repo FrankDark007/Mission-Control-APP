@@ -50,6 +50,7 @@ async function loadModelRegistry() {
         MODEL_REGISTRY = models.reduce((acc, m) => {
             const apiKey = m.manualApiKey || process.env[m.apiKeyEnv] || process.env.API_KEY;
             if (apiKey) acc[m.id] = { ...m, apiKey };
+            else acc[m.id] = { ...m }; // Still include model even if key is missing (for UI visibility)
             return acc;
         }, {});
     } catch (error) {
@@ -66,7 +67,7 @@ async function callAI(modelKey, prompt, systemInstruction = "") {
     const config = MODEL_REGISTRY[modelKey];
     
     // Fallback to standard Gemini if model not in registry
-    if (!config) {
+    if (!config || !config.apiKey) {
         const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
         const res = await ai.models.generateContent({
             model: 'gemini-3-flash-preview',
@@ -131,7 +132,11 @@ const restoredRouter = createRestoredRouter({
     autopilot, 
     agentManager, 
     missionQueue,
-    aiCore: { callAI, getModelRegistry: () => Object.values(MODEL_REGISTRY) }
+    aiCore: { 
+        callAI, 
+        getModelRegistry: () => Object.values(MODEL_REGISTRY),
+        reloadModelRegistry: loadModelRegistry
+    }
 });
 
 app.use('/api', restoredRouter);

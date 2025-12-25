@@ -74,6 +74,8 @@ export interface QueueResponse {
   processing: boolean;
   activeTasks: TaskDefinition[];
   queue: TaskDefinition[];
+  // Added history field to track completed tasks
+  history: TaskDefinition[];
 }
 
 // --- Management & SEO Data ---

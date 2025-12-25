@@ -14,11 +14,83 @@ export const createRestoredRouter = ({ gitService, autopilot, agentManager, miss
     const router = express.Router();
     const FACTS_PATH = join(process.cwd(), 'ops/facts.json');
     const QA_PATH = join(process.cwd(), 'ops/qa_results.json');
+    const MODELS_PATH = join(process.cwd(), 'ops/models.json');
 
     // --- Core Data Endpoints ---
     
     router.get('/models', (req, res) => {
         res.json(aiCore.getModelRegistry());
+    });
+
+    router.get('/autopilot', (req, res) => {
+        res.json(autopilot.getState());
+    });
+
+    router.post('/autopilot', (req, res) => {
+        try {
+            const updated = autopilot.updateState(req.body);
+            res.json(updated);
+        } catch (e) {
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    router.post('/models', async (req, res) => {
+        try {
+            const newModel = req.body;
+            let currentModels = [];
+            if (existsSync(MODELS_PATH)) {
+                const data = await readFile(MODELS_PATH, 'utf8');
+                currentModels = JSON.parse(data);
+            }
+            
+            // Check if model already exists (update) or add new
+            const index = currentModels.findIndex(m => m.id === newModel.id);
+            if (index !== -1) {
+                currentModels[index] = newModel;
+            } else {
+                currentModels.push(newModel);
+            }
+
+            await writeFile(MODELS_PATH, JSON.stringify(currentModels, null, 2));
+            await aiCore.reloadModelRegistry();
+            
+            autopilot.io.emit('log', {
+                agentId: 'system',
+                type: 'system',
+                message: `🤖 AI Registry Updated: ${newModel.name} configured.`,
+                timestamp: new Date().toISOString()
+            });
+            
+            res.json({ success: true });
+        } catch (e) {
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    router.delete('/models/:id', async (req, res) => {
+        try {
+            const { id } = req.params;
+            if (!existsSync(MODELS_PATH)) return res.json({ success: true });
+            
+            const data = await readFile(MODELS_PATH, 'utf8');
+            let currentModels = JSON.parse(data);
+            
+            const filtered = currentModels.filter(m => m.id !== id);
+            await writeFile(MODELS_PATH, JSON.stringify(filtered, null, 2));
+            await aiCore.reloadModelRegistry();
+            
+            autopilot.io.emit('log', {
+                agentId: 'system',
+                type: 'system',
+                message: `🗑️ AI Registry: Model ${id} removed.`,
+                timestamp: new Date().toISOString()
+            });
+            
+            res.json({ success: true });
+        } catch (e) {
+            res.status(500).json({ error: e.message });
+        }
     });
 
     router.get('/facts', async (req, res) => {
