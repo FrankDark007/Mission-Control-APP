@@ -1,0 +1,32 @@
+
+[
+  {
+    "id": "gpt-5.2",
+    "name": "Chat GPT 5.2 Beta",
+    "provider": "openai",
+    "apiModelId": "gpt-5.2-preview",
+    "apiKeyEnv": "OPENAI_API_KEY"
+  },
+  {
+    "id": "gpt-4o",
+    "name": "GPT-4o",
+    "provider": "openai",
+    "apiModelId": "gpt-4o",
+    "apiKeyEnv": "OPENAI_API_KEY"
+  },
+  {
+    "id": "gemini-3-pro",
+    "name": "Gemini 3 Pro",
+    "provider": "google",
+    "apiModelId": "gemini-3-pro-preview",
+    "apiKeyEnv": "API_KEY"
+  },
+  {
+    "id": "deepseek",
+    "name": "DeepSeek",
+    "provider": "openai-compatible",
+    "apiModelId": "deepseek-chat",
+    "baseUrl": "https://api.deepseek.com",
+    "apiKeyEnv": "DEEPSEEK_API_KEY"
+  }
+]

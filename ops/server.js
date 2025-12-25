@@ -35,104 +35,76 @@ const PORT = 3001;
 const HOME = homedir();
 
 // ==========================================
-// 🧠 PLUG-AND-PLAY MODEL REGISTRY
+// 🧠 DYNAMIC MODEL REGISTRY LOADER
 // ==========================================
 
-const MODEL_REGISTRY = {
-    'gemini-3-pro': {
-        name: 'Gemini 3 Pro',
-        provider: 'google',
-        modelId: 'gemini-3-pro-preview',
-        apiKey: process.env.API_KEY
-    },
-    'gemini-2.5-flash': {
-        name: 'Gemini 2.5 Flash',
-        provider: 'google',
-        modelId: 'gemini-2.5-flash-preview',
-        apiKey: process.env.API_KEY
-    },
-    'gpt-4o': {
-        name: 'GPT-4o',
-        provider: 'openai',
-        modelId: 'gpt-4o',
-        apiKey: process.env.OPENAI_API_KEY
-    },
-    'deepseek-coder': {
-        name: 'DeepSeek V3',
-        provider: 'openai-compatible',
-        modelId: 'deepseek-chat',
-        baseURL: 'https://api.deepseek.com',
-        apiKey: process.env.DEEPSEEK_API_KEY
-    },
-    'perplexity-sonar': {
-        name: 'Perplexity Sonar',
-        provider: 'perplexity',
-        modelId: 'sonar-pro',
-        apiKey: process.env.PERPLEXITY_API_KEY
+let MODEL_REGISTRY = {};
+
+async function loadModelRegistry() {
+    try {
+        const configPath = join(process.cwd(), 'models.json');
+        if (!existsSync(configPath)) {
+            console.error('❌ models.json not found. Model registry will be empty.');
+            return;
+        }
+        const data = await readFile(configPath, 'utf8');
+        const models = JSON.parse(data);
+        
+        // Build the registry, validating API Keys against process.env
+        MODEL_REGISTRY = models.reduce((acc, m) => {
+            const apiKey = process.env[m.apiKeyEnv];
+            if (apiKey) {
+                acc[m.id] = { ...m, apiKey };
+                console.log(`✅ Loaded Model: ${m.name} (${m.provider})`);
+            } else {
+                console.warn(`⚠️ Skipping Model: ${m.name} (Missing Env Var: ${m.apiKeyEnv})`);
+            }
+            return acc;
+        }, {});
+    } catch (error) {
+        console.error('❌ Failed to load model registry:', error);
     }
-};
+}
+
+// Initial load
+await loadModelRegistry();
 
 // --- Universal AI Gateway ---
 async function callAI(modelKey, prompt, systemInstruction = "") {
     const config = MODEL_REGISTRY[modelKey];
-    if (!config) throw new Error(`Model ${modelKey} not found in registry.`);
-    if (!config.apiKey) throw new Error(`Missing API Key for ${config.name}`);
+    if (!config) throw new Error(`Model ${modelKey} not found or not configured with an API key.`);
 
     // 1. Google Gemini Provider
     if (config.provider === 'google') {
         const ai = new GoogleGenAI({ apiKey: config.apiKey });
         const res = await ai.models.generateContent({
-            model: config.modelId,
+            model: config.apiModelId,
             contents: prompt,
             config: { systemInstruction }
         });
         return res.text;
     }
 
-    // 2. OpenAI Provider (Native)
-    if (config.provider === 'openai') {
-        const openai = new OpenAI({ apiKey: config.apiKey });
+    // 2. OpenAI & OpenAI-Compatible Provider
+    if (config.provider === 'openai' || config.provider === 'openai-compatible') {
+        const clientConfig = { apiKey: config.apiKey };
+        if (config.baseUrl) clientConfig.baseURL = config.baseUrl;
+        
+        const openai = new OpenAI(clientConfig);
         const completion = await openai.chat.completions.create({
             messages: [
                 { role: "system", content: systemInstruction },
                 { role: "user", content: prompt }
             ],
-            model: config.modelId,
+            model: config.apiModelId,
         });
         return completion.choices[0].message.content;
     }
 
-    // 3. OpenAI-Compatible Provider (DeepSeek, etc.)
-    if (config.provider === 'openai-compatible') {
-        const client = new OpenAI({ 
-            apiKey: config.apiKey, 
-            baseURL: config.baseURL 
-        });
-        const completion = await client.chat.completions.create({
-            messages: [
-                { role: "system", content: systemInstruction },
-                { role: "user", content: prompt }
-            ],
-            model: config.modelId,
-        });
-        return completion.choices[0].message.content;
-    }
-
-    // 4. Perplexity Provider (Axios)
-    if (config.provider === 'perplexity') {
-        const res = await axios.post('https://api.perplexity.ai/chat/completions', {
-            model: config.modelId,
-            messages: [
-                { role: "system", content: systemInstruction || "Be precise." },
-                { role: "user", content: prompt }
-            ]
-        }, {
-            headers: { 
-                'Authorization': `Bearer ${config.apiKey}`,
-                'Content-Type': 'application/json'
-            }
-        });
-        return res.data.choices[0].message.content;
+    // 3. Anthropic (Optional Implementation Example)
+    if (config.provider === 'anthropic') {
+        // Assume axios or specialized SDK if preferred
+        throw new Error("Anthropic provider not fully implemented in this server version.");
     }
 
     throw new Error(`Provider ${config.provider} not implemented.`);
@@ -246,7 +218,6 @@ app.delete('/api/agents/config/:id', (req, res) => {
 // --- MODEL DISCOVERY ---
 app.get('/api/models', (req, res) => {
     const available = Object.entries(MODEL_REGISTRY)
-        .filter(([_, config]) => config.apiKey)
         .map(([key, config]) => ({
             id: key,
             name: config.name,
