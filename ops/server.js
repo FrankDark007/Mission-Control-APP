@@ -148,8 +148,6 @@ let autoPilotConfig = {
     model: 'gemini-3-pro'
 };
 
-let activeBuilderTransaction = null;
-
 let AGENT_CONFIG = {
   design: {
     name: 'Design Agent',
@@ -172,81 +170,10 @@ let AGENT_CONFIG = {
 };
 
 const processes = {}; 
-const restartCounters = {};
 const centralLogBuffer = [];
 const MAX_BUFFER_SIZE = 5000;
-let chatHistory = [];
 let commandQueue = [];
 let activeTasks = new Map(); 
-let completedTaskIds = new Set();
-
-// ... (Existing Process Management & Helper Functions remain roughly same, strictly importing needed parts) ...
-// We will reuse the existing infrastructure code but ensure it uses callAI where appropriate.
-
-const runCommand = (command, cwd, agentId, taskId) => {
-    return new Promise((resolve, reject) => {
-        io.emit('log', { agentId, type: 'system', message: `🚀 Starting task: ${command}`, timestamp: new Date().toISOString() });
-        if (activeTasks.has(taskId)) {
-            activeTasks.get(taskId).lastLog = `Running: ${command.split('&&')[0]}...`;
-        }
-        const child = spawn(command, [], { cwd, shell: true });
-        const updateLog = (d, type) => {
-             const msg = d.toString();
-             if (activeTasks.has(taskId)) {
-                 const cleanMsg = msg.trim().split('\n').pop();
-                 if (cleanMsg) activeTasks.get(taskId).lastLog = cleanMsg.substring(0, 60);
-             }
-             io.emit('log', { agentId, type, message: msg, timestamp: new Date().toISOString() });
-        }
-        child.stdout.on('data', (d) => updateLog(d, 'stdout'));
-        child.stderr.on('data', (d) => updateLog(d, 'stderr'));
-        child.on('close', (code) => {
-             io.emit('log', { agentId, type: 'system', message: `✅ Task finished with code ${code}`, timestamp: new Date().toISOString() });
-             if (code === 0) resolve();
-             else reject(new Error(`Command failed with code ${code}`));
-        });
-    });
-};
-
-const processQueue = async () => {
-    if (commandQueue.length === 0) return;
-    const executableIndices = [];
-    commandQueue.forEach((task, index) => {
-        const dependenciesMet = !task.dependencies || task.dependencies.length === 0 || task.dependencies.every(depId => completedTaskIds.has(depId));
-        if (dependenciesMet) executableIndices.push(index);
-    });
-    if (executableIndices.length === 0) return;
-    executableIndices.sort((a, b) => b - a);
-    const tasksToStart = [];
-    for (const index of executableIndices) {
-        tasksToStart.push(commandQueue[index]);
-        commandQueue.splice(index, 1);
-    }
-    tasksToStart.forEach(task => {
-        const activeTask = { ...task, status: 'processing', startTime: new Date().toISOString(), lastLog: 'Initializing...' };
-        activeTasks.set(task.id, activeTask);
-        executeTask(activeTask);
-    });
-};
-
-const executeTask = async (task) => {
-    try {
-        const projectRoot = join(process.cwd(), '..');
-        if (task.type === 'git_merge') await runCommand('git stash && git pull origin main --rebase && git stash pop', projectRoot, 'git', task.id);
-        else if (task.type === 'build') await runCommand('echo "Building..." && sleep 2 && echo "Build Complete"', projectRoot, 'build', task.id);
-        else if (task.type === 'deploy') await runCommand('npm run build && echo "Deploying..."', projectRoot, 'deploy', task.id);
-        else if (task.type === 'repair' && task.command) await runCommand(task.command, task.cwd || projectRoot, 'system', task.id);
-        else if (task.type === 'seo_audit') await runCommand('echo "SEO Audit..."', projectRoot, 'seo', task.id);
-        else if (task.type === 'lint_design' && processes.design) processes.design.stdin.write("Lint codebase.\n");
-        else if (task.type === 'gen_tests' && processes.design) processes.design.stdin.write("Gen tests.\n");
-        completedTaskIds.add(task.id);
-    } catch (error) {
-        io.emit('log', { agentId: 'system', type: 'stderr', message: `❌ Task Failed: ${error.message}`, timestamp: new Date().toISOString() });
-    } finally {
-        activeTasks.delete(task.id);
-        processQueue(); 
-    }
-};
 
 const broadcastStatus = () => {
   const status = {};
@@ -254,7 +181,6 @@ const broadcastStatus = () => {
   io.emit('status', status);
 };
 const broadcastRegistry = () => io.emit('agent-registry', AGENT_CONFIG);
-const broadcastAutoPilot = () => io.emit('autopilot-config', autoPilotConfig);
 
 // Process Logic (Start/Stop)
 const startAgentProcess = (agentId, args) => {
@@ -285,9 +211,40 @@ const startAgentProcess = (agentId, args) => {
 // 🔌 API ROUTES
 // ==========================================
 
+// --- AGENT CONFIG MANAGEMENT ---
+app.post('/api/agents/config', (req, res) => {
+  const { id, config } = req.body;
+  if (!id || !config) return res.status(400).json({ error: 'Missing agent id or config' });
+  
+  AGENT_CONFIG[id] = {
+    ...config,
+    safeArgs: Array.isArray(config.safeArgs) ? config.safeArgs : [],
+    yoloArgs: Array.isArray(config.yoloArgs) ? config.yoloArgs : []
+  };
+  
+  broadcastRegistry();
+  broadcastStatus();
+  res.json({ success: true, registry: AGENT_CONFIG });
+});
+
+app.delete('/api/agents/config/:id', (req, res) => {
+  const { id } = req.params;
+  if (AGENT_CONFIG[id]) {
+    if (processes[id]) {
+      processes[id].kill();
+      processes[id] = null;
+    }
+    delete AGENT_CONFIG[id];
+    broadcastRegistry();
+    broadcastStatus();
+    res.json({ success: true });
+  } else {
+    res.status(404).json({ error: 'Agent not found' });
+  }
+});
+
 // --- MODEL DISCOVERY ---
 app.get('/api/models', (req, res) => {
-    // Return only models that have a configured API key
     const available = Object.entries(MODEL_REGISTRY)
         .filter(([_, config]) => config.apiKey)
         .map(([key, config]) => ({
@@ -300,12 +257,11 @@ app.get('/api/models', (req, res) => {
 
 // --- COUNCIL OF AI ---
 app.post('/api/swarm/council', async (req, res) => {
-    const { prompt, models, synthesizer } = req.body; // models: ['gpt-4o', 'gemini-3-pro'], synthesizer: 'gpt-4o'
+    const { prompt, models, synthesizer } = req.body;
     const responses = {};
 
     io.emit('log', { agentId: 'system', type: 'system', message: `⚔️ Council Convened. Active Members: ${models.join(', ')}`, timestamp: new Date().toISOString() });
 
-    // 1. Run all selected models in parallel
     const promises = models.map(async (modelKey) => {
         try {
             io.emit('log', { agentId: 'system', type: 'system', message: `...Consulting ${MODEL_REGISTRY[modelKey]?.name || modelKey}`, timestamp: new Date().toISOString() });
@@ -318,15 +274,11 @@ app.post('/api/swarm/council', async (req, res) => {
 
     await Promise.all(promises);
 
-    // 2. Synthesize Consensus
     let consensus = "";
     let usedSynthesizer = "";
 
     try {
-        // Resolve synthesizer: User choice -> Gemini 3 Pro -> GPT-4o -> First available
         let targetSynthesizer = synthesizer;
-        
-        // Validation: If user selected synthesizer is invalid or missing, fallback
         if (!targetSynthesizer || !MODEL_REGISTRY[targetSynthesizer]) {
              targetSynthesizer = models.includes('gemini-3-pro') ? 'gemini-3-pro' : 
                                  models.includes('gpt-4o') ? 'gpt-4o' : 
@@ -340,24 +292,17 @@ app.post('/api/swarm/council', async (req, res) => {
 
             const synthesisPrompt = `
             You are the Chief Justice of the AI Supreme Court.
-            
             THE CASE (PROBLEM): ${prompt}
-            
             ARGUMENTS SUBMITTED BY THE COUNCIL:
             ${Object.entries(responses).map(([key, response]) => `--- ${MODEL_REGISTRY[key]?.name || key.toUpperCase()} ---\n${response}\n`).join('\n')}
-            
             YOUR JUDGMENT:
-            Synthesize these arguments into a single, authoritative consensus solution. 
-            Critically evaluate the input. Resolve conflicts. Pick the best parts of each.
-            Provide a final "verdict" or solution path.
-            Format in Markdown.
-            `;
+            Synthesize these arguments into a single, authoritative consensus solution. Critically evaluate the input. Provide a final verdict.
+            Format in Markdown.`;
 
             consensus = await callAI(targetSynthesizer, synthesisPrompt, "You are the wise synthesizer.");
         } else {
             consensus = "No capable synthesizer available.";
         }
-
     } catch (e) {
         consensus = "Failed to generate consensus: " + e.message;
     }
@@ -365,82 +310,41 @@ app.post('/api/swarm/council', async (req, res) => {
     res.json({ individual_responses: responses, consensus, synthesizer: usedSynthesizer });
 });
 
-// --- BASIC CHAT (Single Model) ---
 app.post('/api/chat', async (req, res) => {
-    const { message, model } = req.body; // 'model' is now a key from MODEL_REGISTRY
+    const { message, model } = req.body;
     try {
-        // Fallback for old hardcoded keys if frontend sends them
-        let targetKey = model;
-        if (model === 'gemini-3-pro') targetKey = 'gemini-3-pro'; // already matches
-        if (!MODEL_REGISTRY[targetKey]) {
-            // Default to first available google model or just fail safe
-            targetKey = 'gemini-3-pro'; 
-        }
-
+        let targetKey = model || 'gemini-3-pro';
         const responseText = await callAI(targetKey, message, "You are the Flood Doctor Mission Control AI.");
         res.json({ response: responseText });
     } catch (error) {
-        console.error("AI Error:", error);
         res.status(500).json({ error: error.message, response: `System Error: ${error.message}` });
     }
 });
 
-// --- VISUAL QA SENTINEL ---
 app.post('/api/qa/visual', async (req, res) => {
-    const targetUrl = req.body.url || 'http://localhost:5173'; // Default to standard Vite port if not specified
+    const targetUrl = req.body.url || 'http://localhost:5173';
     io.emit('log', { agentId: 'system', type: 'system', message: `📸 Visual Sentinel: Capturing screenshots of ${targetUrl}...`, timestamp: new Date().toISOString() });
-    
     const screenshotsDir = join(process.cwd(), 'screenshots');
 
     try {
-        if (!existsSync(screenshotsDir)) {
-            await mkdir(screenshotsDir, { recursive: true });
-        }
-
-        const browser = await puppeteer.launch({
-            headless: 'new',
-            args: ['--no-sandbox', '--disable-setuid-sandbox'] 
-        });
-
+        if (!existsSync(screenshotsDir)) await mkdir(screenshotsDir, { recursive: true });
+        const browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox'] });
         const page = await browser.newPage();
-        
-        // Desktop Capture
         await page.setViewport({ width: 1920, height: 1080 });
-        try {
-            await page.goto(targetUrl, { waitUntil: 'networkidle0', timeout: 30000 });
-        } catch (e) {
-            io.emit('log', { agentId: 'system', type: 'stderr', message: `⚠️ Page load timed out or failed, taking screenshot anyway...`, timestamp: new Date().toISOString() });
-        }
+        try { await page.goto(targetUrl, { waitUntil: 'networkidle0', timeout: 30000 }); } catch (e) {}
         await page.screenshot({ path: join(screenshotsDir, 'desktop.png') });
-
-        // Mobile Capture
         await page.setViewport({ width: 375, height: 667, isMobile: true });
         await page.screenshot({ path: join(screenshotsDir, 'mobile.png') });
-
         await browser.close();
-
-        io.emit('log', { agentId: 'system', type: 'system', message: `✅ Visual Sentinel: Screenshots captured successfully.`, timestamp: new Date().toISOString() });
-
-        // Return relative URLs with cache busting
+        io.emit('log', { agentId: 'system', type: 'system', message: `✅ Visual Sentinel: Screenshots captured.`, timestamp: new Date().toISOString() });
         const timestamp = Date.now();
-        res.json({
-            success: true,
-            results: {
-                desktop: `/screenshots/desktop.png?t=${timestamp}`,
-                mobile: `/screenshots/mobile.png?t=${timestamp}`,
-                diff: 0 // Mock diff for now
-            }
-        });
-
+        res.json({ success: true, results: { desktop: `/screenshots/desktop.png?t=${timestamp}`, mobile: `/screenshots/mobile.png?t=${timestamp}`, diff: 0 } });
     } catch (error) {
-        console.error('Visual Audit Error:', error);
         io.emit('log', { agentId: 'system', type: 'stderr', message: `❌ Visual Sentinel Failed: ${error.message}`, timestamp: new Date().toISOString() });
         res.status(500).json({ error: error.message });
     }
 });
 
-// --- Standard Ops Endpoints (Agents, Git, Etc) ---
-app.post('/api/agents/spawn', async (req, res) => { /* Reuse logic */ res.json({success: true}) });
 app.get('/api/queue/status', (req, res) => { res.json({ processing: activeTasks.size > 0, activeTasks: Array.from(activeTasks.values()), queue: commandQueue }); });
 app.post('/api/start/:agentId', (req, res) => {
     const { agentId } = req.params;
