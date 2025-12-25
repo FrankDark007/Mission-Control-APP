@@ -61,10 +61,11 @@ const STANDARDS_PREAMBLE = `STRICT AUDIT & SECURITY MODE ACTIVE.
 
 If you are unsure, you must browse these sites to verify before writing code.`;
 
-// Configuration for Agents and Worktrees
-const AGENT_CONFIG = {
+// Configuration for Agents and Worktrees (MUTABLE)
+let AGENT_CONFIG = {
   design: {
     name: 'Design Agent',
+    role: 'UI/UX & Components',
     path: join(HOME, '.claude-worktrees/flood-doctor/design-build'),
     command: 'claude',
     // Safe args prompt for permission, Yolo args skip them
@@ -74,6 +75,7 @@ const AGENT_CONFIG = {
   },
   seo: {
     name: 'SEO Agent',
+    role: 'Content & Strategy',
     path: join(HOME, '.claude-worktrees/flood-doctor/seo-content'),
     command: 'claude',
     safeArgs: ['--chrome'],
@@ -112,17 +114,11 @@ if (!existsSync(FACTS_FILE)) {
     writeFile(FACTS_FILE, JSON.stringify(DEFAULT_FACTS, null, 2)).catch(console.error);
 }
 
-// Store active processes
-const processes = {
-  design: null,
-  seo: null
-};
+// Store active processes (Dynamic Dictionary)
+const processes = {}; 
 
-// Restart counters to prevent infinite loops
-const restartCounters = {
-    design: { count: 0, firstFailureTime: 0 },
-    seo: { count: 0, firstFailureTime: 0 }
-};
+// Restart counters to prevent infinite loops (Dynamic Dictionary)
+const restartCounters = {};
 
 // Centralized Log Buffer
 const centralLogBuffer = [];
@@ -259,10 +255,15 @@ const executeTask = async (task) => {
 // --- Helper Functions ---
 
 const broadcastStatus = () => {
-  io.emit('status', {
-    design: processes.design ? 'running' : 'stopped',
-    seo: processes.seo ? 'running' : 'stopped'
+  const status = {};
+  Object.keys(AGENT_CONFIG).forEach(id => {
+      status[id] = processes[id] ? 'running' : 'stopped';
   });
+  io.emit('status', status);
+};
+
+const broadcastRegistry = () => {
+    io.emit('agent-registry', AGENT_CONFIG);
 };
 
 const broadcastAutoPilot = () => {
@@ -318,7 +319,9 @@ const startAgentProcess = (agentId, args) => {
           // Restart Policy Logic
           if (config.restartPolicy === 'on-failure') {
               const now = Date.now();
-              const counter = restartCounters[agentId];
+              const counter = restartCounters[agentId] || { count: 0, firstFailureTime: 0 };
+              restartCounters[agentId] = counter;
+
               const RESTART_WINDOW = 60000; // 1 min
               const RESTART_LIMIT = 5;
 
@@ -682,6 +685,44 @@ app.post('/api/heal/approve', (req, res) => {
     res.json({ success: true, message: 'Repair task queued.' });
 });
 
+// Dynamic Agent Spawning
+app.post('/api/agents/spawn', async (req, res) => {
+    const { name, role } = req.body;
+    if (!name || !role) return res.status(400).json({ error: "Name and Role are required." });
+
+    const id = name.toLowerCase().replace(/[^a-z0-9]/g, '-');
+    const agentPath = join(HOME, '.claude-worktrees/flood-doctor', id);
+
+    try {
+        if (!existsSync(agentPath)) {
+            await mkdir(agentPath, { recursive: true });
+        }
+        
+        await writeFile(join(agentPath, 'metadata.json'), JSON.stringify({ name, role, created: new Date().toISOString() }, null, 2));
+
+        AGENT_CONFIG[id] = {
+            name: name,
+            role: role,
+            path: agentPath,
+            command: 'claude',
+            safeArgs: ['--chrome'],
+            yoloArgs: ['--chrome', '--dangerously-skip-permissions'],
+            restartPolicy: 'on-failure'
+        };
+
+        io.emit('log', { agentId: 'system', type: 'system', message: `✨ Spawning new agent: ${name} (${role})`, timestamp: new Date().toISOString() });
+        
+        // Broadcast new list to all clients
+        broadcastRegistry();
+        broadcastStatus(); // Update status indicators
+
+        res.json({ success: true, id });
+    } catch (e) {
+        console.error("Spawn failed:", e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // Start/Stop
 app.post('/api/start/:agentId', (req, res) => {
   const { agentId } = req.params;
@@ -715,6 +756,32 @@ app.post('/api/git/merge', async (req, res) => {
   commandQueue.push({ id: Date.now(), type: 'git_merge', name: 'Merge Origin/Main', status: 'pending', created: new Date().toISOString() });
   processQueue();
   res.json({ success: true });
+});
+
+app.post('/api/git/pull', async (req, res) => {
+    io.emit('log', { agentId: 'system', type: 'system', message: '⬇️ Starting System Update (git pull)...', timestamp: new Date().toISOString() });
+    try {
+        // Execute git pull from project root
+        const { stdout, stderr } = await execAsync('git pull origin main', { cwd: join(process.cwd(), '..') }); 
+        
+        io.emit('log', { agentId: 'system', type: 'stdout', message: stdout, timestamp: new Date().toISOString() });
+        if (stderr) io.emit('log', { agentId: 'system', type: 'stderr', message: stderr, timestamp: new Date().toISOString() });
+
+        res.json({ success: true, message: stdout });
+    } catch (error) {
+        io.emit('log', { agentId: 'system', type: 'stderr', message: `❌ Update Failed: ${error.message}`, timestamp: new Date().toISOString() });
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/system/restart', (req, res) => {
+    io.emit('log', { agentId: 'system', type: 'system', message: '🔄 System Restart Initiated...', timestamp: new Date().toISOString() });
+    res.json({ success: true, message: 'Rebooting...' });
+    
+    // Allow response to flush
+    setTimeout(() => {
+        process.exit(0); // Exit successfully, relying on nodemon/supervisor to restart
+    }, 500);
 });
 
 app.post('/api/deploy', async (req, res) => {
@@ -933,6 +1000,11 @@ app.post('/api/chat', async (req, res) => {
     io.emit('log', { agentId: 'system', type: 'stderr', message: `❌ AI Failure: ${error.message}`, timestamp: new Date().toISOString() });
     res.status(500).json({ error: error.message, response: `**System Error**: ${error.message}` });
   }
+});
+
+io.on('connection', (socket) => {
+    socket.emit('agent-registry', AGENT_CONFIG);
+    broadcastStatus();
 });
 
 httpServer.listen(PORT, () => {

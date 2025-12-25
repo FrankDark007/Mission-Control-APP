@@ -1,9 +1,16 @@
 
 export type AgentStatus = 'running' | 'stopped' | 'error' | 'waiting_approval';
 
-export interface SwarmStatus {
-  design: AgentStatus;
-  seo: AgentStatus;
+export type SwarmStatus = Record<string, AgentStatus>;
+
+export interface AgentConfig {
+    name: string;
+    role?: string;
+    path: string;
+    command: string;
+    safeArgs: string[];
+    yoloArgs: string[];
+    restartPolicy: string;
 }
 
 export interface LogMessage {

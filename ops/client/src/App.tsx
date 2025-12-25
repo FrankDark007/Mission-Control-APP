@@ -46,10 +46,13 @@ import {
   Monitor,
   AlertTriangle,
   Zap,
-  TestTube
+  TestTube,
+  Plus,
+  DownloadCloud,
+  RefreshCcw
 } from 'lucide-react';
 import io, { Socket } from 'socket.io-client';
-import type { LogMessage, SwarmStatus, ChatMessage, AiModelId, AutoPilotConfig, QueueResponse, HealingProposal, TaskDefinition, AuditScore, GitCommit, SeoPageMetric, KeywordRank, VisualAuditResult } from './types';
+import type { LogMessage, SwarmStatus, ChatMessage, AiModelId, AutoPilotConfig, QueueResponse, HealingProposal, TaskDefinition, AuditScore, GitCommit, SeoPageMetric, KeywordRank, VisualAuditResult, AgentConfig } from './types';
 
 // --- Components defined within App.tsx for simplicity ---
 
@@ -84,7 +87,7 @@ const StatusBadge = ({ status }: { status: string }) => {
     error: 'bg-google-red/20 text-google-red border-google-red/30',
     waiting_approval: 'bg-google-yellow/20 text-google-yellow border-google-yellow/30'
   };
-  const label = status.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+  const label = status ? status.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : 'Unknown';
   const colorClass = colors[status as keyof typeof colors] || colors.stopped;
 
   return (
@@ -142,6 +145,7 @@ const SeoKpiCard = ({ label, value, delta, subLabel }: { label: string, value: s
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'logs' | 'qa' | 'ai' | 'manage' | 'seo'>('dashboard');
   const [swarmStatus, setSwarmStatus] = useState<SwarmStatus>({ design: 'stopped', seo: 'stopped' });
+  const [agentRegistry, setAgentRegistry] = useState<Record<string, AgentConfig>>({});
   const [logs, setLogs] = useState<LogMessage[]>([]);
   const [qaContent, setQaContent] = useState<string>('Loading QA Report...');
   const [socket, setSocket] = useState<Socket | null>(null);
@@ -164,6 +168,15 @@ const App: React.FC = () => {
   
   // Builder Mode State
   const [builderProgress, setBuilderProgress] = useState(0);
+
+  // Spawn Modal State
+  const [isSpawnModalOpen, setIsSpawnModalOpen] = useState(false);
+  const [newAgentName, setNewAgentName] = useState('');
+  const [newAgentRole, setNewAgentRole] = useState('');
+
+  // Updates State
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [isRebooting, setIsRebooting] = useState(false);
 
   // Manage Tab State
   const [auditScores, setAuditScores] = useState<AuditScore | null>(null);
@@ -209,6 +222,10 @@ const App: React.FC = () => {
 
     newSocket.on('status', (status: SwarmStatus) => {
       setSwarmStatus(status);
+    });
+
+    newSocket.on('agent-registry', (registry: Record<string, AgentConfig>) => {
+      setAgentRegistry(registry);
     });
 
     newSocket.on('log', (message: LogMessage) => {
@@ -337,8 +354,64 @@ const App: React.FC = () => {
     await fetch(`http://localhost:3001/api/stop/${agentId}`, { method: 'POST' });
   };
 
+  const handleSpawnAgent = async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!newAgentName || !newAgentRole) return;
+      
+      try {
+          const res = await fetch('http://localhost:3001/api/agents/spawn', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ name: newAgentName, role: newAgentRole })
+          });
+          const data = await res.json();
+          if (data.success) {
+              setIsSpawnModalOpen(false);
+              setNewAgentName('');
+              setNewAgentRole('');
+          } else {
+              alert("Failed to spawn agent: " + data.error);
+          }
+      } catch (err) {
+          console.error(err);
+      }
+  };
+
   const handleGitMerge = async () => {
     await fetch('http://localhost:3001/api/git/merge', { method: 'POST' });
+  };
+
+  const handleGitPull = async () => {
+      setIsUpdating(true);
+      try {
+          const res = await fetch('http://localhost:3001/api/git/pull', { method: 'POST' });
+          const data = await res.json();
+          if (data.success) {
+              alert(`System Updated!\n\nOutput:\n${data.message}`);
+          } else {
+              alert(`Update Failed:\n${data.error}`);
+          }
+      } catch (e) {
+          alert(`Network Error: ${e.message}`);
+      } finally {
+          setIsUpdating(false);
+      }
+  };
+
+  const handleRestart = async () => {
+      if (!confirm("Are you sure you want to restart the Ops Server? This will disconnect all active agents temporarily.")) return;
+      
+      setIsRebooting(true);
+      try {
+          await fetch('http://localhost:3001/api/system/restart', { method: 'POST' });
+          // Wait 5 seconds then reload
+          setTimeout(() => {
+              window.location.reload();
+          }, 5000);
+      } catch (e) {
+          alert(`Restart Failed: ${e.message}`);
+          setIsRebooting(false);
+      }
   };
 
   const handleDeploy = async () => {
@@ -778,7 +851,7 @@ const App: React.FC = () => {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-y-auto bg-dark-900">
+      <main className="flex-1 overflow-y-auto bg-dark-900 relative">
         <header className="h-16 border-b border-dark-700 bg-dark-900/50 backdrop-blur sticky top-0 z-10 flex items-center px-8 justify-between">
           <h2 className="text-xl font-semibold text-white">
             {activeTab === 'dashboard' && 'Operations Dashboard'}
@@ -827,11 +900,33 @@ const App: React.FC = () => {
 
              <div className="h-6 w-px bg-dark-700 mx-2"></div>
 
+             {/* SYSTEM MAINTENANCE GROUP */}
+             <div className="flex items-center bg-dark-800 rounded-md border border-dark-600 p-1">
+                 <button
+                    onClick={handleGitPull}
+                    disabled={isUpdating}
+                    title="Pull latest code from Git"
+                    className="flex items-center gap-2 hover:bg-dark-700 text-gray-300 hover:text-white px-3 py-1 rounded text-xs transition-colors border-r border-dark-700"
+                >
+                    {isUpdating ? <Loader2 size={12} className="animate-spin" /> : <DownloadCloud size={12} />}
+                    {isUpdating ? 'Syncing...' : 'Updates'}
+                </button>
+                <button
+                    onClick={handleRestart}
+                    disabled={isRebooting}
+                    title="Restart Node.js Server"
+                    className="flex items-center gap-2 hover:bg-red-900/30 text-gray-300 hover:text-red-400 px-3 py-1 rounded text-xs transition-colors"
+                >
+                    {isRebooting ? <Loader2 size={12} className="animate-spin" /> : <RefreshCcw size={12} />}
+                    {isRebooting ? 'Rebooting...' : 'Restart'}
+                </button>
+             </div>
+
              <button 
                 onClick={handleGitMerge} 
                 className="flex items-center gap-2 bg-dark-700 hover:bg-dark-600 text-white px-3 py-1.5 rounded-md text-sm transition-colors border border-dark-600"
              >
-                <GitBranch size={14} /> Merge & Sync
+                <GitBranch size={14} /> Merge
              </button>
              <button 
                 onClick={handleDeploy} 
@@ -855,6 +950,20 @@ const App: React.FC = () => {
           {activeTab === 'dashboard' && (
             <div className="space-y-8 overflow-y-auto pb-20">
               
+              {/* Heading & Spawn Button */}
+              <div className="flex justify-between items-center">
+                  <div>
+                      <h3 className="text-2xl font-bold text-white tracking-tight">Active Swarm</h3>
+                      <p className="text-sm text-gray-400">Manage autonomous agents and worktrees.</p>
+                  </div>
+                  <button 
+                      onClick={() => setIsSpawnModalOpen(true)}
+                      className="bg-google-blue hover:bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-colors"
+                  >
+                      <Plus size={18} /> Spawn New Agent
+                  </button>
+              </div>
+
               {/* Healing Proposal Card */}
               {healingProposal && (
                   <div className="bg-red-900/20 border border-red-500/50 rounded-xl p-6 shadow-2xl relative animate-in fade-in slide-in-from-top-4">
@@ -906,92 +1015,70 @@ const App: React.FC = () => {
                   </div>
               )}
 
-              {/* Agent Cards */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Dynamic Agent Cards Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 
-                {/* Design Agent */}
-                <div className="bg-dark-800 rounded-xl border border-dark-700 p-6 shadow-xl relative overflow-hidden group">
-                  <div className="absolute top-0 right-0 p-6 opacity-10 group-hover:opacity-20 transition-opacity">
-                    <Cpu size={120} />
-                  </div>
-                  <div className="relative z-10">
-                    <div className="flex justify-between items-start mb-4">
-                      <div>
-                        <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                          Design Agent
-                          <span className="text-xs font-normal text-gray-500 px-2 py-0.5 bg-dark-700 rounded">~/design-build</span>
-                          {autoPilot.standardsMode && (
-                             <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-green-900/40 text-green-400 border border-green-700/50 gap-1">
-                                 <Shield size={10} /> Verified Standards
-                             </span>
-                          )}
-                        </h3>
-                        <p className="text-sm text-gray-400 mt-1">Responsible for UI/UX, Component Generation</p>
-                      </div>
-                      <StatusBadge status={swarmStatus.design} />
-                    </div>
+                {Object.entries(agentRegistry).map(([id, agent]) => {
+                    const status = swarmStatus[id] || 'stopped';
+                    // Determine Icon based on ID or role
+                    let AgentIcon = Bot;
+                    if (id.includes('design')) AgentIcon = Cpu;
+                    else if (id.includes('seo')) AgentIcon = RefreshCw;
                     
-                    <div className="flex gap-3 mt-6">
-                      {swarmStatus.design !== 'running' ? (
-                        <button 
-                          onClick={() => handleStart('design')}
-                          className="flex-1 bg-google-blue hover:bg-blue-600 text-white py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 transition-colors"
-                        >
-                          <Play size={16} fill="currentColor" /> Start Agent {autoPilot.enabled ? '(Auto-Pilot)' : ''}
-                        </button>
-                      ) : (
-                        <button 
-                          onClick={() => handleStop('design')}
-                          className="flex-1 bg-dark-700 hover:bg-red-900/30 hover:text-red-500 hover:border-red-500/50 border border-dark-600 text-gray-300 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 transition-all"
-                        >
-                          <Square size={16} fill="currentColor" /> Stop Agent
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
+                    return (
+                        <div key={id} className="bg-dark-800 rounded-xl border border-dark-700 p-6 shadow-xl relative overflow-hidden group">
+                            <div className="absolute top-0 right-0 p-6 opacity-10 group-hover:opacity-20 transition-opacity">
+                                <AgentIcon size={120} />
+                            </div>
+                            <div className="relative z-10 flex flex-col h-full">
+                                <div className="flex justify-between items-start mb-4">
+                                    <div>
+                                        <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                                            {agent.name}
+                                            {autoPilot.standardsMode && (
+                                                <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-900/40 text-green-400 border border-green-700/50" title="Standards Mode">
+                                                    <Shield size={10} />
+                                                </span>
+                                            )}
+                                        </h3>
+                                        <div className="text-xs text-gray-500 font-mono mt-1 mb-1 truncate max-w-[200px]" title={agent.path}>
+                                            ~/{agent.path.split('/').pop()}
+                                        </div>
+                                        <p className="text-xs text-gray-400 font-medium">{agent.role || 'General Task Agent'}</p>
+                                    </div>
+                                    <StatusBadge status={status} />
+                                </div>
+                                
+                                <div className="mt-auto pt-4 flex gap-3">
+                                    {status !== 'running' ? (
+                                        <button 
+                                            onClick={() => handleStart(id)}
+                                            className="flex-1 bg-google-blue hover:bg-blue-600 text-white py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 transition-colors shadow-lg shadow-blue-900/20"
+                                        >
+                                            <Play size={16} fill="currentColor" /> Start {autoPilot.enabled ? '(Auto)' : ''}
+                                        </button>
+                                    ) : (
+                                        <button 
+                                            onClick={() => handleStop(id)}
+                                            className="flex-1 bg-dark-700 hover:bg-red-900/30 hover:text-red-500 hover:border-red-500/50 border border-dark-600 text-gray-300 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 transition-all"
+                                        >
+                                            <Square size={16} fill="currentColor" /> Stop Agent
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    );
+                })}
 
-                {/* SEO Agent */}
-                <div className="bg-dark-800 rounded-xl border border-dark-700 p-6 shadow-xl relative overflow-hidden group">
-                  <div className="absolute top-0 right-0 p-6 opacity-10 group-hover:opacity-20 transition-opacity">
-                    <RefreshCw size={120} />
-                  </div>
-                  <div className="relative z-10">
-                    <div className="flex justify-between items-start mb-4">
-                      <div>
-                        <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                          SEO Agent
-                          <span className="text-xs font-normal text-gray-500 px-2 py-0.5 bg-dark-700 rounded">~/seo-content</span>
-                          {autoPilot.standardsMode && (
-                             <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-green-900/40 text-green-400 border border-green-700/50 gap-1">
-                                 <Shield size={10} /> Verified Standards
-                             </span>
-                          )}
-                        </h3>
-                        <p className="text-sm text-gray-400 mt-1">Responsible for Content Strategy, Keywords</p>
-                      </div>
-                      <StatusBadge status={swarmStatus.seo} />
+                {/* Empty State */}
+                {Object.keys(agentRegistry).length === 0 && (
+                    <div className="col-span-full py-12 flex flex-col items-center justify-center text-gray-500 border-2 border-dashed border-dark-700 rounded-xl">
+                        <Bot size={48} className="mb-4 opacity-50" />
+                        <p>No agents configured.</p>
+                        <button onClick={() => setIsSpawnModalOpen(true)} className="text-google-blue font-bold mt-2 hover:underline">Spawn your first agent</button>
                     </div>
-                    
-                    <div className="flex gap-3 mt-6">
-                      {swarmStatus.seo !== 'running' ? (
-                        <button 
-                          onClick={() => handleStart('seo')}
-                          className="flex-1 bg-google-blue hover:bg-blue-600 text-white py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 transition-colors"
-                        >
-                          <Play size={16} fill="currentColor" /> Start Agent {autoPilot.enabled ? '(Auto-Pilot)' : ''}
-                        </button>
-                      ) : (
-                        <button 
-                          onClick={() => handleStop('seo')}
-                          className="flex-1 bg-dark-700 hover:bg-red-900/30 hover:text-red-500 hover:border-red-500/50 border border-dark-600 text-gray-300 py-2 rounded-lg text-sm font-medium flex items-center justify-center gap-2 transition-all"
-                        >
-                          <Square size={16} fill="currentColor" /> Stop Agent
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
+                )}
 
               </div>
 
@@ -1555,6 +1642,63 @@ const App: React.FC = () => {
           )}
 
         </div>
+
+        {/* SPAWN AGENT MODAL */}
+        {isSpawnModalOpen && (
+            <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                <div className="bg-dark-800 border border-dark-600 rounded-xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                    <div className="p-6 border-b border-dark-700">
+                        <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                            <Plus className="text-google-blue" size={20} />
+                            Spawn New Agent
+                        </h3>
+                        <p className="text-sm text-gray-400 mt-1">
+                            This will create a new specialized worktree and register it with the swarm.
+                        </p>
+                    </div>
+                    <form onSubmit={handleSpawnAgent} className="p-6 space-y-4">
+                        <div>
+                            <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Agent Name</label>
+                            <input 
+                                type="text" 
+                                value={newAgentName}
+                                onChange={(e) => setNewAgentName(e.target.value)}
+                                placeholder="e.g. QA Bot, Security Guard"
+                                className="w-full bg-dark-900 border border-dark-600 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-google-blue outline-none"
+                                required
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Role / Purpose</label>
+                            <input 
+                                type="text" 
+                                value={newAgentRole}
+                                onChange={(e) => setNewAgentRole(e.target.value)}
+                                placeholder="e.g. Automated Testing & Reporting"
+                                className="w-full bg-dark-900 border border-dark-600 rounded-lg px-4 py-2 text-white focus:ring-2 focus:ring-google-blue outline-none"
+                                required
+                            />
+                        </div>
+                        <div className="flex gap-3 pt-4">
+                            <button 
+                                type="button" 
+                                onClick={() => setIsSpawnModalOpen(false)}
+                                className="flex-1 bg-dark-700 hover:bg-dark-600 text-gray-300 py-2 rounded-lg text-sm font-medium transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button 
+                                type="submit" 
+                                className="flex-1 bg-google-blue hover:bg-blue-600 text-white py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition-colors"
+                            >
+                                <Bot size={16} /> Spawn Agent
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        )}
+
       </main>
     </div>
   );
