@@ -4,7 +4,8 @@ import {
     Bot, Terminal, Activity, Shield, Zap, Search, Map, Send,
     Play, Square, RefreshCw, X, FileCode, CheckCircle, AlertTriangle,
     Cpu, Workflow, LayoutDashboard, MessageSquare, Database, Plus, Settings,
-    Swords, Loader2, BrainCircuit, Gavel, Eye, FileText, Trash2, Edit3, Save, ChevronRight
+    Swords, Loader2, BrainCircuit, Gavel, Eye, FileText, Trash2, Edit3, Save, ChevronRight,
+    TrendingUp, BarChart, Globe
 } from 'lucide-react';
 import {
     AgentConfig, LogMessage, QueueResponse, TaskDefinition,
@@ -19,7 +20,7 @@ interface ModelInfo {
 
 const App = () => {
     const [socket, setSocket] = useState<Socket | null>(null);
-    const [activeTab, setActiveTab] = useState<'dashboard' | 'chat' | 'war-room' | 'qa'>('dashboard');
+    const [activeTab, setActiveTab] = useState<'dashboard' | 'chat' | 'war-room' | 'seo' | 'qa'>('dashboard');
     const [agentRegistry, setAgentRegistry] = useState<Record<string, AgentConfig>>({});
     const [agentStatus, setAgentStatus] = useState<Record<string, string>>({});
     const [logs, setLogs] = useState<LogMessage[]>([]);
@@ -228,19 +229,22 @@ const App = () => {
         );
     };
 
-    const renderLogs = () => (
-        <div className="bg-black rounded-lg p-4 font-mono text-xs h-[400px] overflow-y-auto border border-dark-700">
-            {logs.length === 0 && <div className="text-gray-600">Waiting for logs...</div>}
-            {logs.map((log, i) => (
-                <div key={i} className="mb-1 break-words">
-                    <span className="text-gray-500 mr-2">[{new Date(log.timestamp).toLocaleTimeString()}]</span>
-                    <span className={`font-bold mr-2 ${log.agentId === 'system' ? 'text-purple-400' : 'text-blue-400'}`}>{log.agentId}:</span>
-                    <span className={log.type === 'stderr' ? 'text-red-400' : 'text-gray-300'}>{log.message}</span>
-                </div>
-            ))}
-            <div ref={logsEndRef} />
-        </div>
-    );
+    const renderLogs = (filterId?: string) => {
+        const filtered = filterId ? logs.filter(l => l.agentId === filterId) : logs;
+        return (
+            <div className="bg-black rounded-lg p-4 font-mono text-xs h-[400px] overflow-y-auto border border-dark-700">
+                {filtered.length === 0 && <div className="text-gray-600">Waiting for logs...</div>}
+                {filtered.map((log, i) => (
+                    <div key={i} className="mb-1 break-words">
+                        <span className="text-gray-500 mr-2">[{new Date(log.timestamp).toLocaleTimeString()}]</span>
+                        <span className={`font-bold mr-2 ${log.agentId === 'system' ? 'text-purple-400' : 'text-blue-400'}`}>{log.agentId}:</span>
+                        <span className={log.type === 'stderr' ? 'text-red-400' : 'text-gray-300'}>{log.message}</span>
+                    </div>
+                ))}
+                <div ref={logsEndRef} />
+            </div>
+        );
+    };
 
     return (
         <div className="min-h-screen bg-dark-900 text-gray-200 font-sans flex">
@@ -262,6 +266,9 @@ const App = () => {
                     </button>
                     <button onClick={() => setActiveTab('war-room')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'war-room' ? 'bg-google-blue/10 text-google-blue' : 'hover:bg-dark-700 text-gray-400'}`}>
                         <Swords size={18} /> War Room
+                    </button>
+                    <button onClick={() => setActiveTab('seo')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'seo' ? 'bg-google-blue/10 text-google-blue' : 'hover:bg-dark-700 text-gray-400'}`}>
+                        <Search size={18} /> SEO Center
                     </button>
                     <button onClick={() => setActiveTab('qa')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${activeTab === 'qa' ? 'bg-google-blue/10 text-google-blue' : 'hover:bg-dark-700 text-gray-400'}`}>
                         <CheckCircle size={18} /> QA & Audit
@@ -386,6 +393,75 @@ const App = () => {
                                 </div>
                             </div>
                         )}
+                    </div>
+                )}
+
+                {activeTab === 'seo' && (
+                    <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4">
+                        <div className="flex items-center gap-3 mb-2">
+                             <div className="bg-google-blue p-2 rounded-lg"><TrendingUp size={24} className="text-white"/></div>
+                             <div>
+                                <h2 className="text-2xl font-bold text-white">SEO Command Center</h2>
+                                <p className="text-gray-400 text-sm">Content Strategy & Organic Performance</p>
+                             </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                            {/* SEO Agent Control */}
+                            <div className="lg:col-span-1 bg-dark-800 border border-dark-700 rounded-xl p-6">
+                                <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                                    <Zap className="text-google-yellow" size={18} /> Agent Control
+                                </h3>
+                                <div className="space-y-4">
+                                    <div className="flex justify-between items-center p-3 bg-dark-900 rounded-lg border border-dark-700">
+                                        <span className="text-sm font-medium text-gray-300">SEO Specialist Agent</span>
+                                        <span className={`text-[10px] px-2 py-0.5 rounded font-bold uppercase ${agentStatus['seo'] === 'running' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                                            {agentStatus['seo'] || 'STOPPED'}
+                                        </span>
+                                    </div>
+                                    <div className="flex gap-2">
+                                        {agentStatus['seo'] === 'running' ? (
+                                            <button onClick={() => stopAgent('seo')} className="flex-1 bg-dark-700 hover:bg-red-900/30 hover:text-red-400 text-gray-300 py-2.5 rounded-lg text-sm font-bold transition-colors flex items-center justify-center gap-2">
+                                                <Square size={14} fill="currentColor" /> Stop Agent
+                                            </button>
+                                        ) : (
+                                            <button onClick={() => startAgent('seo')} className="flex-1 bg-google-blue hover:bg-blue-600 text-white py-2.5 rounded-lg text-sm font-bold transition-colors flex items-center justify-center gap-2">
+                                                <Play size={14} fill="currentColor" /> Start Agent
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Quick Actions */}
+                            <div className="lg:col-span-2 bg-dark-800 border border-dark-700 rounded-xl p-6">
+                                <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                                    <Activity className="text-google-blue" size={18} /> Quick Actions
+                                </h3>
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                    <button className="flex flex-col items-center justify-center p-4 bg-dark-900 hover:bg-google-blue/10 border border-dark-700 hover:border-google-blue/50 rounded-xl transition-all group">
+                                        <Search className="text-gray-400 group-hover:text-google-blue mb-2" size={24} />
+                                        <span className="text-xs font-bold text-gray-300">Run Audit</span>
+                                    </button>
+                                    <button className="flex flex-col items-center justify-center p-4 bg-dark-900 hover:bg-google-blue/10 border border-dark-700 hover:border-google-blue/50 rounded-xl transition-all group">
+                                        <BarChart className="text-gray-400 group-hover:text-google-blue mb-2" size={24} />
+                                        <span className="text-xs font-bold text-gray-300">Check Rankings</span>
+                                    </button>
+                                    <button className="flex flex-col items-center justify-center p-4 bg-dark-900 hover:bg-google-blue/10 border border-dark-700 hover:border-google-blue/50 rounded-xl transition-all group">
+                                        <Globe className="text-gray-400 group-hover:text-google-blue mb-2" size={24} />
+                                        <span className="text-xs font-bold text-gray-300">Gen Strategy</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Filtered Logs */}
+                        <div className="space-y-3">
+                            <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider flex items-center gap-2">
+                                <Terminal size={16} /> SEO Agent Logs
+                            </h3>
+                            {renderLogs('seo')}
+                        </div>
                     </div>
                 )}
                 
