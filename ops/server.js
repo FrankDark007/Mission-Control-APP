@@ -476,3 +476,15 @@ app.get('/api/audit/lighthouse', async (req, res) => {
   }
 });
 
+
+// --- Telemetry ingestion (restored) ---
+app.post('/api/telemetry', async (req, res) => {
+  try {
+    const payload = req.body || {};
+    // Intentionally minimal: accept and acknowledge telemetry
+    res.json({ ok: true, received: true });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
