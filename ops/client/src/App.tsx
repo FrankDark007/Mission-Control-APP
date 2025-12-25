@@ -162,6 +162,9 @@ const App: React.FC = () => {
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [attachedImage, setAttachedImage] = useState<string | null>(null);
   
+  // Builder Mode State
+  const [builderProgress, setBuilderProgress] = useState(0);
+
   // Manage Tab State
   const [auditScores, setAuditScores] = useState<AuditScore | null>(null);
   const [isAuditing, setIsAuditing] = useState(false);
@@ -224,6 +227,22 @@ const App: React.FC = () => {
       newSocket.disconnect();
     };
   }, []);
+
+  // Builder Mode Mock Progress
+  useEffect(() => {
+    if (isAiLoading && selectedModel === 'builder-mode') {
+      setBuilderProgress(0);
+      const interval = setInterval(() => {
+        setBuilderProgress(prev => {
+          if (prev >= 95) return 95; // Stall at 95 until done
+          return prev + 5;
+        });
+      }, 500); 
+      return () => clearInterval(interval);
+    } else {
+      setBuilderProgress(0);
+    }
+  }, [isAiLoading, selectedModel]);
 
   // TELEMETRY & BLACK BOX RECORDER
   useEffect(() => {
@@ -324,6 +343,10 @@ const App: React.FC = () => {
 
   const handleDeploy = async () => {
     await fetch('http://localhost:3001/api/deploy', { method: 'POST' });
+  };
+
+  const handleCancelBuilder = async () => {
+      await fetch('http://localhost:3001/api/builder/cancel', { method: 'POST' });
   };
   
   const handleApproveFix = async () => {
@@ -1060,19 +1083,60 @@ const App: React.FC = () => {
                         </div>
                     ))}
                     {isAiLoading && (
-                        <div className="flex justify-start">
-                            <div className="bg-dark-700 text-gray-400 p-4 rounded-lg border border-dark-600 flex items-center gap-2">
-                                <div className="w-2 h-2 bg-google-blue rounded-full animate-bounce"></div>
-                                <div className="w-2 h-2 bg-google-blue rounded-full animate-bounce delay-75"></div>
-                                <div className="w-2 h-2 bg-google-blue rounded-full animate-bounce delay-150"></div>
+                        <div className="flex flex-col gap-2 w-full max-w-[80%]">
+                             <div className="flex justify-start">
+                                <div className="bg-dark-700 text-gray-400 p-4 rounded-lg border border-dark-600 flex items-center gap-2">
+                                    <div className="w-2 h-2 bg-google-blue rounded-full animate-bounce"></div>
+                                    <div className="w-2 h-2 bg-google-blue rounded-full animate-bounce delay-75"></div>
+                                    <div className="w-2 h-2 bg-google-blue rounded-full animate-bounce delay-150"></div>
+                                </div>
                             </div>
+                            
+                            {/* BUILDER MODE PROGRESS UI */}
+                            {selectedModel === 'builder-mode' && (
+                                <div className="bg-dark-800 border border-dark-600 rounded-lg p-3 animate-in fade-in slide-in-from-bottom-2">
+                                    <div className="flex justify-between items-center mb-2">
+                                        <div className="flex items-center gap-2 text-xs font-bold text-google-blue">
+                                            <Hammer size={12} className="animate-pulse" />
+                                            <span>ATOMIC TRANSACTION IN PROGRESS</span>
+                                        </div>
+                                        <button 
+                                            onClick={handleCancelBuilder}
+                                            className="text-[10px] bg-red-900/30 text-red-400 hover:bg-red-900/50 px-2 py-1 rounded border border-red-900/50 flex items-center gap-1 transition-colors"
+                                        >
+                                            <XCircle size={10} /> Cancel Transaction
+                                        </button>
+                                    </div>
+                                    <div className="w-full bg-dark-900 rounded-full h-2 mb-1 overflow-hidden relative">
+                                        {/* Striped Background */}
+                                        <div className="absolute inset-0 bg-[linear-gradient(45deg,transparent_25%,rgba(255,255,255,0.05)_25%,rgba(255,255,255,0.05)_50%,transparent_50%,transparent_75%,rgba(255,255,255,0.05)_75%,rgba(255,255,255,0.05))] bg-[length:10px_10px] animate-[pulse_2s_infinite]"></div>
+                                        {/* Progress Fill */}
+                                        <div 
+                                            className="bg-google-blue h-2 rounded-full transition-all duration-500 ease-out" 
+                                            style={{ width: `${builderProgress}%` }}
+                                        ></div>
+                                    </div>
+                                    <div className="flex justify-between text-[10px] text-gray-500 font-mono">
+                                        <span>Backups Secured...</span>
+                                        <span>{builderProgress}%</span>
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     )}
                     <div ref={chatEndRef} />
                 </div>
 
                 {/* Input Area */}
-                <form onSubmit={handleSendMessage} className="p-4 bg-dark-900 border-t border-dark-700">
+                <form onSubmit={handleSendMessage} className="p-4 bg-dark-900 border-t border-dark-700 relative">
+                    
+                    {/* Visual Indicator when Builder Mode is active */}
+                    {isAiLoading && selectedModel === 'builder-mode' && (
+                        <div className="absolute top-0 left-0 right-0 h-1 bg-google-blue/20 overflow-hidden">
+                             <div className="h-full bg-google-blue/50 w-1/3 animate-[slide_2s_infinite_linear]"></div>
+                        </div>
+                    )}
+
                     {attachedImage && (
                         <div className="mb-2 flex items-center gap-2 bg-dark-800 p-2 rounded-lg w-fit border border-dark-600">
                              <img src={attachedImage} className="w-10 h-10 object-cover rounded" alt="Preview"/>
@@ -1100,8 +1164,8 @@ const App: React.FC = () => {
                                 type="text"
                                 value={chatInput}
                                 onChange={(e) => setChatInput(e.target.value)}
-                                placeholder="Ask the swarm..."
-                                className="w-full bg-dark-800 border border-dark-600 text-white rounded-lg pl-4 pr-12 py-3 focus:ring-2 focus:ring-google-blue focus:border-transparent outline-none"
+                                placeholder={selectedModel === 'builder-mode' ? "Describe the architecture changes..." : "Ask the swarm..."}
+                                className={`w-full bg-dark-800 border ${selectedModel === 'builder-mode' ? 'border-purple-500/30 focus:border-purple-500' : 'border-dark-600 focus:border-transparent'} text-white rounded-lg pl-4 pr-12 py-3 focus:ring-2 focus:ring-google-blue outline-none transition-colors`}
                             />
                             <button 
                                 type="submit" 

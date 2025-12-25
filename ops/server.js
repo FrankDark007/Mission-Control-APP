@@ -44,6 +44,9 @@ let autoPilotConfig = {
     model: 'gemini-3-pro'
 };
 
+// Builder Mode State
+let activeBuilderTransaction = null;
+
 const STANDARDS_PREAMBLE = `STRICT AUDIT & SECURITY MODE ACTIVE.
 1. DOCUMENTATION FIRST:
    - HTML/CSS/JS: Verify syntax against MDN (developer.mozilla.org).
@@ -469,12 +472,20 @@ async function getProjectContext() {
 async function runAtomicTransaction(plan) {
     const backupList = [];
     const clientDir = join(process.cwd(), 'client');
+    activeBuilderTransaction = { aborted: false };
+
+    const checkAbort = () => {
+        if (activeBuilderTransaction?.aborted) throw new Error("Transaction Cancelled by User");
+    };
     
     io.emit('log', { agentId: 'system', type: 'system', message: `🧠 Builder Mode: Starting Atomic Transaction for ${plan.files.length} files...`, timestamp: new Date().toISOString() });
 
     try {
+        checkAbort();
+
         // Step 1: Backups
         for (const file of plan.files) {
+            checkAbort();
             const filePath = join(process.cwd(), file.path);
             if (existsSync(filePath)) {
                 const bakPath = filePath + '.bak';
@@ -485,16 +496,16 @@ async function runAtomicTransaction(plan) {
 
         // Step 2: Dependencies
         if (plan.dependencies && plan.dependencies.length > 0) {
+            checkAbort();
             io.emit('log', { agentId: 'system', type: 'system', message: `📦 Installing dependencies: ${plan.dependencies.join(', ')}`, timestamp: new Date().toISOString() });
-            // Install in client directory if it's a frontend dep, else root (simplified logic: check if path contains client)
-            // For safety, let's assume client deps for now or just run in root/client based on where package.json is.
-            // We will run in client dir by default for UI changes.
+            // Install in client directory if it's a frontend dep, else root
             await execAsync(`npm install ${plan.dependencies.join(' ')}`, { cwd: clientDir });
         }
 
         // Step 3: Pre-Flight Check (Server)
         const serverFile = plan.files.find(f => f.path.endsWith('server.js'));
         if (serverFile) {
+            checkAbort();
             io.emit('log', { agentId: 'system', type: 'system', message: `🛡️ Pre-Flight: Verifying Server Integrity...`, timestamp: new Date().toISOString() });
             const checkPath = join(process.cwd(), 'server.check.js');
             await writeFile(checkPath, serverFile.content);
@@ -509,13 +520,16 @@ async function runAtomicTransaction(plan) {
 
         // Step 4: Write & Build
         for (const file of plan.files) {
+             checkAbort();
              const filePath = join(process.cwd(), file.path);
              await writeFile(filePath, file.content);
         }
 
         io.emit('log', { agentId: 'system', type: 'system', message: `🔨 Verifying Build...`, timestamp: new Date().toISOString() });
         // Build Frontend
+        checkAbort();
         await execAsync('npm run build', { cwd: clientDir });
+        checkAbort();
 
         // Step 5: Success - Cleanup Backups
         io.emit('log', { agentId: 'system', type: 'system', message: `✅ Transaction Complete. Cleaning up...`, timestamp: new Date().toISOString() });
@@ -528,11 +542,36 @@ async function runAtomicTransaction(plan) {
     } catch (error) {
         // Step 6: Rollback
         io.emit('log', { agentId: 'system', type: 'stderr', message: `❌ Transaction Failed: ${error.message}. ROLLING BACK.`, timestamp: new Date().toISOString() });
-        for (const b of backupList) {
-            await copyFile(b.backup, b.original);
-            await unlink(b.backup);
+        
+        try {
+            for (const b of backupList.reverse()) {
+                if (existsSync(b.backup)) {
+                    await copyFile(b.backup, b.original);
+                    await unlink(b.backup);
+                }
+            }
+            io.emit('log', { agentId: 'system', type: 'system', message: `✅ Rollback Successful. System state restored.`, timestamp: new Date().toISOString() });
+        } catch (rollbackError) {
+             io.emit('log', { agentId: 'system', type: 'stderr', message: `🚨 CRITICAL: AUTOMATIC ROLLBACK FAILED.`, timestamp: new Date().toISOString() });
+             io.emit('log', { agentId: 'system', type: 'stderr', message: `Manual intervention required. Backups located at: ${backupList.map(b => b.backup).join(', ')}`, timestamp: new Date().toISOString() });
+             
+             // Create emergency recovery file
+             const recoveryContent = `
+             # EMERGENCY RECOVERY
+             Automatic rollback failed.
+             
+             ## Backups
+             ${backupList.map(b => `- ${b.backup} -> ${b.original}`).join('\n')}
+             
+             ## Error
+             ${rollbackError.message}
+             `;
+             await writeFile(join(process.cwd(), 'RECOVERY_INSTRUCTIONS.md'), recoveryContent);
         }
+        
         throw error; // Re-throw to inform AI
+    } finally {
+        activeBuilderTransaction = null;
     }
 }
 
@@ -752,6 +791,17 @@ app.post('/api/git/reset', async (req, res) => {
 app.post('/api/facts', async (req, res) => {
     try { await writeFile(FACTS_FILE, JSON.stringify(req.body, null, 2)); res.json({ success: true }); } 
     catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Builder Mode Cancel
+app.post('/api/builder/cancel', (req, res) => {
+    if (activeBuilderTransaction) {
+        activeBuilderTransaction.aborted = true;
+        io.emit('log', { agentId: 'system', type: 'system', message: `🛑 User requested Transaction Cancellation...`, timestamp: new Date().toISOString() });
+        res.json({ success: true, message: "Cancellation signal sent." });
+    } else {
+        res.status(400).json({ error: "No active builder transaction." });
+    }
 });
 
 // --- MAIN AI ENDPOINT ---
