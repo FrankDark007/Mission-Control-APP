@@ -422,3 +422,14 @@ app.post('/api/facts', async (req, res) => {
   }
 });
 
+
+// --- Deploy trigger (restored) ---
+app.post('/api/deploy', async (req, res) => {
+  try {
+    // Placeholder deploy hook (intentionally minimal)
+    res.json({ ok: true, status: 'deploy triggered' });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
