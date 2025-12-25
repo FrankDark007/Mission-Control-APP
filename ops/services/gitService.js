@@ -1,8 +1,10 @@
+
 import simpleGit from 'simple-git';
-import { existsSync } from 'fs';
+import { existsSync, mkdirSync } from 'fs';
+import { join } from 'path';
 
 /**
- * Service for managing Git repository operations.
+ * Service for managing Git repository operations and isolated worktrees.
  */
 export class GitService {
     constructor(repoPath) {
@@ -10,9 +12,6 @@ export class GitService {
         this.repoPath = repoPath;
     }
 
-    /**
-     * Retrieves the commit log.
-     */
     async log(limit = 10) {
         try {
             if (!existsSync(this.repoPath)) throw new Error('Repository path not found');
@@ -24,61 +23,45 @@ export class GitService {
         }
     }
 
-    /**
-     * Performs a git pull.
-     */
     async pull() {
-        try {
-            const result = await this.git.pull();
-            return { success: true, result };
-        } catch (e) {
-            console.error('Git Pull Error:', e.message);
-            throw e;
-        }
+        return await this.git.pull();
     }
 
-    /**
-     * Resets the repository to a target state (hard reset).
-     */
-    async reset(target = 'HEAD') {
-        try {
-            const result = await this.git.reset(['--hard', target]);
-            return { success: true, target: result };
-        } catch (e) {
-            console.error('Git Reset Error:', e.message);
-            throw e;
-        }
-    }
-
-    /**
-     * Merges a branch into the current one.
-     */
-    async merge(branch) {
-        try {
-            const result = await this.git.merge([branch]);
-            return { success: true, result };
-        } catch (e) {
-            console.error('Git Merge Error:', e.message);
-            throw e;
-        }
-    }
-
-    /**
-     * Performs a git push.
-     */
     async push() {
+        return await this.git.push();
+    }
+
+    /**
+     * Creates an isolated worktree for a sub-agent.
+     */
+    async addWorktree(path, branch) {
         try {
-            const result = await this.git.push();
-            return { success: true, result };
+            // Ensure parent directory exists
+            const parentDir = join(path, '..');
+            if (!existsSync(parentDir)) mkdirSync(parentDir, { recursive: true });
+            
+            // git worktree add <path> <branch>
+            await this.git.raw(['worktree', 'add', '-b', branch, path]);
+            return { success: true, path, branch };
         } catch (e) {
-            console.error('Git Push Error:', e.message);
+            console.error('Git Worktree Add Error:', e.message);
             throw e;
         }
     }
 
     /**
-     * Gets current repository status.
+     * Removes a worktree after task completion.
      */
+    async removeWorktree(path) {
+        try {
+            await this.git.raw(['worktree', 'remove', path]);
+            return { success: true };
+        } catch (e) {
+            console.error('Git Worktree Remove Error:', e.message);
+            throw e;
+        }
+    }
+
     async status() {
         return await this.git.status();
     }

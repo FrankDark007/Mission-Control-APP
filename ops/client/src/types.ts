@@ -64,6 +64,8 @@ export interface TaskDefinition {
   name: string;
   status: 'pending' | 'processing' | 'completed' | 'failed';
   dependencies?: number[];
+  // Fix: Added parentId property to support recursive task hierarchy in the frontend
+  parentId?: number | string | null;
   lastLog?: string;
   startTime?: string;
   created?: string;
@@ -91,6 +93,8 @@ export interface GitCommit {
   hash: string;
   message: string;
   date: string;
+  // Added author_name to match the data returned by simple-git
+  author_name?: string;
 }
 
 export interface FactDatabase {
