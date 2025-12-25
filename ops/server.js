@@ -361,3 +361,42 @@ httpServer.listen(PORT, HOST, () => {
 io.on('connection', (socket) => {
   socket.emit('log', { agentId: 'system', type: 'system', message: 'Mission Control Online.', timestamp: new Date().toISOString() });
 });
+
+// --- Autopilot control (restored) ---
+let autoPilotConfig = {
+  enabled: false,
+  mode: 'SAFE', // SAFE | YOLO
+};
+
+app.get('/api/autopilot', (req, res) => {
+  res.json(autoPilotConfig);
+});
+
+app.post('/api/autopilot', (req, res) => {
+  const { enabled, mode } = req.body || {};
+
+  if (typeof enabled === 'boolean') {
+    autoPilotConfig.enabled = enabled;
+  }
+
+  if (mode === 'SAFE' || mode === 'YOLO') {
+    autoPilotConfig.mode = mode;
+  }
+
+  res.json({ ok: true, autoPilotConfig });
+});
+
+
+// --- Queue status (restored) ---
+let commandQueue = [];
+let activeTasks = [];
+
+app.get('/api/queue/status', (req, res) => {
+  res.json({
+    queued: commandQueue.length,
+    active: activeTasks.length,
+    queue: commandQueue,
+    activeTasks,
+  });
+});
+
