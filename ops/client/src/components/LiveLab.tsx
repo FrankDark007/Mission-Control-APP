@@ -79,7 +79,8 @@ const LiveLab = () => {
   const startSession = async () => {
     setIsConnecting(true);
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+      // Fix: Ensure correct initialization of GoogleGenAI using process.env.API_KEY
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       
       if (!audioContextRef.current) {
         audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
@@ -122,6 +123,7 @@ const LiveLab = () => {
                 mimeType: 'audio/pcm;rate=16000',
               };
               
+              // Fix: Solely rely on sessionPromise resolves to send realtime data
               sessionPromise.then((session) => {
                 session.sendRealtimeInput({ media: pcmBlob });
               });

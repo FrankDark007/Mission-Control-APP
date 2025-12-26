@@ -48,7 +48,6 @@ if (!existsSync(BASELINES_DIR)) mkdirSync(BASELINES_DIR, { recursive: true });
 // ==========================================
 
 let MODEL_REGISTRY = {};
-const autopilotCtrl = new AutopilotController(process.env.API_KEY);
 
 async function loadModelRegistry() {
     try {
@@ -59,8 +58,8 @@ async function loadModelRegistry() {
         
         MODEL_REGISTRY = models.reduce((acc, m) => {
             const apiKey = m.manualApiKey || process.env[m.apiKeyEnv] || process.env.API_KEY;
-            if (apiKey) acc[m.id] = { ...m, apiKey };
-            else acc[m.id] = { ...m };
+            if (apiKey) acc[m.id] = { ...m, apiKey, ready: true };
+            else acc[m.id] = { ...m, ready: false };
             return acc;
         }, {});
     } catch (error) {
@@ -133,6 +132,9 @@ async function callAI(modelKey, prompt, systemInstruction = "", latLng = null, t
     }
     throw new Error(`Provider ${config.provider} not implemented.`);
 }
+
+// Instantiate controller with the callAI helper
+const autopilotCtrl = new AutopilotController(callAI);
 
 // ==========================================
 // 🎨 CREATIVE TOOLS ENDPOINTS
@@ -256,8 +258,9 @@ const missionQueue = new MissionQueue(io);
 
 io.on('connection', (socket) => {
     socket.on('agent-log-internal', async ({ agentId, log }) => {
-        if (autopilot.getState().enabled && (log.includes('error') || log.includes('fail'))) {
-            const proposal = await autopilotCtrl.evaluateLog(agentId, log);
+        const state = autopilot.getState();
+        if (state.enabled && (log.includes('error') || log.includes('fail'))) {
+            const proposal = await autopilotCtrl.evaluateLog(agentId, log, state.model);
             if (proposal.failure) {
                 io.emit('agent-deviation', { 
                     agentId, 

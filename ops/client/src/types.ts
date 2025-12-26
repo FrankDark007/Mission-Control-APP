@@ -83,9 +83,7 @@ export interface TaskDefinition {
   parentId?: number | string | null;
   lastLog?: string;
   startTime?: string;
-  // endTime is set by missionQueue.js upon mission completion
   endTime?: string;
-  // error is captured by missionQueue.js in case of failure
   error?: string;
   created?: string;
   result?: any;
@@ -114,11 +112,23 @@ export interface SeoPageMetric {
   lastUpdated: string;
 }
 
-// Added GitCommit interface to resolve module error in GitPulse.tsx
 export interface GitCommit {
   hash: string;
   date: string;
   message: string;
   author_name: string;
   author_email: string;
+}
+
+export interface ProtocolStep {
+    agentId: string;
+    taskName: string;
+    instruction: string;
+}
+
+export interface Protocol {
+    id: string;
+    name: string;
+    steps: ProtocolStep[];
+    timestamp: number;
 }

@@ -1,10 +1,11 @@
 
 import express from 'express';
-import { writeFile, readFile, readdir } from 'fs/promises';
+import { writeFile, readFile, readdir, mkdir, unlink, rm } from 'fs/promises';
 import { existsSync, mkdirSync } from 'fs';
-import { join } from 'path';
+import { join, relative } from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import puppeteer from 'puppeteer';
 
 const execAsync = promisify(exec);
 
@@ -12,14 +13,266 @@ export const createRestoredRouter = ({ gitService, autopilot, agentManager, miss
     const router = express.Router();
     const FACTS_PATH = join(process.cwd(), 'ops/facts.json');
     const PROMPTS_PATH = join(process.cwd(), 'ops/prompts.json');
+    const PROTOCOLS_PATH = join(process.cwd(), 'ops/protocols.json');
     const BASELINES_DIR = join(process.cwd(), 'baselines');
 
     if (!existsSync(BASELINES_DIR)) mkdirSync(BASELINES_DIR, { recursive: true });
 
     // ==========================================
+    // 🔌 MCP DEBUG BRIDGE (SENSORY UPGRADE)
+    // ==========================================
+    router.get('/mcp/context', async (req, res) => {
+        try {
+            const context = {
+                swarmState: agentManager.getStatus(),
+                queue: missionQueue.getStatus(),
+                git: await gitService.status(),
+                cwd: process.cwd()
+            };
+            res.json(context);
+        } catch (e) {
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    /**
+     * Feature 1: DevTools Sensory Snapshot.
+     * Uses Puppeteer to give AI agents "eyes" into the browser environment.
+     */
+    router.post('/mcp/sensory-snapshot', async (req, res) => {
+        const { url = 'http://localhost:4000' } = req.body;
+        let browser;
+        try {
+            browser = await puppeteer.launch({ headless: "new" });
+            const page = await browser.newPage();
+            const logs = [];
+            page.on('console', msg => logs.push(`[Browser] ${msg.type()}: ${msg.text()}`));
+            page.on('pageerror', err => logs.push(`[Error] ${err.message}`));
+
+            await page.goto(url, { waitUntil: 'networkidle0', timeout: 10000 });
+            
+            const metrics = await page.evaluate(() => ({
+                domNodes: document.querySelectorAll('*').length,
+                title: document.title,
+                scripts: document.querySelectorAll('script').length
+            }));
+
+            res.json({ logs, metrics, timestamp: Date.now() });
+        } catch (e) {
+            res.status(500).json({ error: e.message });
+        } finally {
+            if (browser) await browser.close();
+        }
+    });
+
+    router.post('/mcp/inspect', async (req, res) => {
+        const { targetPath } = req.body;
+        try {
+            const absolute = join(process.cwd(), targetPath);
+            const { stdout } = await execAsync(`ls -la ${absolute}`);
+            res.json({ output: stdout });
+        } catch (e) {
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    // ==========================================
+    // 💬 TACTICAL CHAT GATEWAY
+    // ==========================================
+    router.post('/chat', async (req, res) => {
+        const { message, model, systemInstruction, latLng, thinkingBudget } = req.body;
+        try {
+            const result = await aiCore.callAI(model, message, systemInstruction, latLng, thinkingBudget);
+            res.json({ content: result.text, groundingChunks: result.groundingChunks });
+        } catch (e) {
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    // ==========================================
+    // 🤖 AUTOPILOT CONFIG
+    // ==========================================
+    router.post('/autopilot/config', (req, res) => {
+        try {
+            const newState = autopilot.updateState(req.body);
+            res.json(newState);
+        } catch (e) {
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    // ==========================================
+    // 🛠️ BUILDER ENGINE (FILE SYSTEM & SHELL)
+    // ==========================================
+    
+    async function getFileTree(dir, baseDir, gitStatus = []) {
+        const entries = await readdir(dir, { withFileTypes: true });
+        const files = await Promise.all(entries.map(async (entry) => {
+            const res = join(dir, entry.name);
+            if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist' || entry.name === '.DS_Store' || entry.name === 'baselines') return null;
+            
+            const relPath = relative(baseDir, res);
+            const status = gitStatus.find(s => s.path === relPath || s.path.startsWith(relPath + '/'));
+
+            if (entry.isDirectory()) {
+                return {
+                    name: entry.name,
+                    path: relPath,
+                    type: 'directory',
+                    gitStatus: status ? status.index : null,
+                    children: await getFileTree(res, baseDir, gitStatus)
+                };
+            } else {
+                return {
+                    name: entry.name,
+                    path: relPath,
+                    gitStatus: status ? status.index : null,
+                    type: 'file'
+                };
+            }
+        }));
+        return files.filter(Boolean);
+    }
+
+    router.get('/builder/files', async (req, res) => {
+        try {
+            const status = await gitService.status();
+            const tree = await getFileTree(process.cwd(), process.cwd(), status.files);
+            res.json(tree);
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    router.post('/builder/read', async (req, res) => {
+        const { path: filePath } = req.body;
+        try {
+            const absolutePath = join(process.cwd(), filePath);
+            if (!absolutePath.startsWith(process.cwd())) throw new Error("Security Violation: Out of bounds");
+            const content = await readFile(absolutePath, 'utf8');
+            res.json({ content });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    router.post('/builder/write', async (req, res) => {
+        const { path: filePath, content } = req.body;
+        try {
+            const absolutePath = join(process.cwd(), filePath);
+            if (!absolutePath.startsWith(process.cwd())) throw new Error("Security Violation: Out of bounds");
+            await writeFile(absolutePath, content);
+            missionQueue.addTask({ name: `Commit: ${filePath}`, type: 'builder-write', status: 'completed' });
+            res.json({ success: true });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    router.post('/builder/create', async (req, res) => {
+        const { path: filePath, type } = req.body;
+        try {
+            const absolutePath = join(process.cwd(), filePath);
+            if (!absolutePath.startsWith(process.cwd())) throw new Error("Security Violation: Out of bounds");
+            if (type === 'directory') {
+                await mkdir(absolutePath, { recursive: true });
+            } else {
+                await writeFile(absolutePath, '');
+            }
+            res.json({ success: true });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    router.post('/builder/delete', async (req, res) => {
+        const { path: filePath } = req.body;
+        try {
+            const absolutePath = join(process.cwd(), filePath);
+            if (!absolutePath.startsWith(process.cwd())) throw new Error("Security Violation: Out of bounds");
+            await rm(absolutePath, { recursive: true, force: true });
+            res.json({ success: true });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    router.post('/builder/terminal', async (req, res) => {
+        const { command } = req.body;
+        try {
+            const { stdout, stderr } = await execAsync(command, { cwd: process.cwd(), timeout: 30000 });
+            res.json({ stdout, stderr });
+        } catch (e) {
+            res.json({ stdout: e.stdout, stderr: e.stderr || e.message, error: true });
+        }
+    });
+
+    router.get('/builder/context', async (req, res) => {
+        try {
+            const criticalFiles = ['package.json', 'metadata.json', 'ops/models.json'];
+            const context = {};
+            for (const file of criticalFiles) {
+                if (existsSync(join(process.cwd(), file))) {
+                    context[file] = await readFile(join(process.cwd(), file), 'utf8');
+                }
+            }
+            res.json(context);
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // ==========================================
+    // 📋 MISSION PROTOCOLS (RUNBOOKS)
+    // ==========================================
+    router.get('/protocols', async (req, res) => {
+        try {
+            if (existsSync(PROTOCOLS_PATH)) {
+                const data = await readFile(PROTOCOLS_PATH, 'utf8');
+                return res.json(JSON.parse(data));
+            }
+            res.json([]);
+        } catch (e) { res.json([]); }
+    });
+
+    router.post('/protocols', async (req, res) => {
+        try {
+            let protocols = [];
+            if (existsSync(PROTOCOLS_PATH)) {
+                const data = await readFile(PROTOCOLS_PATH, 'utf8');
+                protocols = JSON.parse(data);
+            }
+            const newProtocol = { ...req.body, id: `proto-${Date.now()}`, timestamp: Date.now() };
+            protocols.push(newProtocol);
+            await writeFile(PROTOCOLS_PATH, JSON.stringify(protocols, null, 2));
+            res.json(newProtocol);
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    router.post('/protocols/execute/:id', async (req, res) => {
+        const { id } = req.params;
+        try {
+            const data = await readFile(PROTOCOLS_PATH, 'utf8');
+            const protocols = JSON.parse(data);
+            const protocol = protocols.find(p => p.id === id);
+            if (!protocol) throw new Error("Protocol not found.");
+
+            // Sequential mission scheduling with dependencies
+            let previousId = null;
+            const tasks = protocol.steps.map((step, index) => {
+                const taskId = Date.now() + index;
+                const task = missionQueue.addTask({
+                    id: taskId,
+                    name: step.taskName,
+                    type: step.agentId,
+                    instruction: step.instruction,
+                    dependencies: previousId ? [previousId] : []
+                });
+                previousId = taskId;
+                return task;
+            });
+            res.json({ success: true, tasks });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // ==========================================
     // 🔍 CORE SYSTEM & STATUS
     // ==========================================
     router.get('/models', (req, res) => res.json(aiCore.getModelRegistry()));
+    router.post('/models/reload', async (req, res) => {
+        try {
+            await aiCore.reloadModelRegistry();
+            res.json({ success: true, models: aiCore.getModelRegistry() });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
     router.get('/autopilot', (req, res) => res.json(autopilot.getState()));
     router.get('/queue/status', (req, res) => res.json(missionQueue.getStatus()));
 

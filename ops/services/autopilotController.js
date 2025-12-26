@@ -1,12 +1,10 @@
 
-import { GoogleGenAI } from "@google/genai";
-
 export class AutopilotController {
-    constructor(apiKey) {
-        this.ai = new GoogleGenAI({ apiKey });
+    constructor(callAIFunction) {
+        this.callAI = callAIFunction;
     }
 
-    async evaluateLog(agentId, logChunk) {
+    async evaluateLog(agentId, logChunk, modelId = 'gemini-3-flash-preview') {
         const prompt = `
             Analyze the following agent logs and determine if there is a critical failure.
             Agent: ${agentId}
@@ -18,19 +16,23 @@ export class AutopilotController {
         `;
 
         try {
-            const response = await this.ai.models.generateContent({
-                model: 'gemini-3-flash-preview',
-                contents: prompt,
-                config: { responseMimeType: 'application/json' }
-            });
-            return JSON.parse(response.text);
+            // Using the central callAI logic which handles provider routing and system instructions
+            const response = await this.callAI(
+                modelId, 
+                prompt, 
+                "You are an expert systems engineer. You must return ONLY a valid JSON object."
+            );
+            
+            // Clean markdown if the model included it
+            const cleaned = response.text.replace(/```json|```/g, '').trim();
+            return JSON.parse(cleaned);
         } catch (e) {
             console.error('Autopilot Evaluation Error:', e);
             return { failure: false, error: e.message };
         }
     }
 
-    async proposeCodeFix(filePath, errorCode, currentContent) {
+    async proposeCodeFix(filePath, errorCode, currentContent, modelId = 'gemini-3-pro-preview') {
         const prompt = `
             The file at ${filePath} is failing with the following error:
             ${errorCode}
@@ -43,10 +45,7 @@ export class AutopilotController {
         `;
 
         try {
-            const response = await this.ai.models.generateContent({
-                model: 'gemini-3-pro-preview',
-                contents: prompt
-            });
+            const response = await this.callAI(modelId, prompt, "You are a senior software architect.");
             return response.text;
         } catch (e) {
             console.error('Autopilot Code Fix Error:', e);

@@ -9,12 +9,31 @@
   }
 }
 
-.text-glow {
-  text-shadow: 0 0 15px rgba(26,115,232,0.4);
+/* Scroll-Triggered Reveal Animations */
+@supports (view-timeline: --reveal) {
+  .reveal-on-scroll {
+    view-timeline-name: --reveal;
+    view-timeline-axis: block;
+    animation-name: reveal-anim;
+    animation-fill-mode: both;
+    animation-timeline: --reveal;
+    animation-range: entry 10% cover 30%;
+  }
+
+  @keyframes reveal-anim {
+    from { opacity: 0; transform: translateY(50px) scale(0.9); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
 }
 
-.shadow-glow {
-  box-shadow: 0 0 20px rgba(26,115,232,0.2);
+/* Shadow DOM isolation styles for Web Components */
+status-badge {
+  display: inline-block;
+  font-family: 'Plus Jakarta Sans', sans-serif;
+}
+
+.text-glow {
+  text-shadow: 0 0 15px rgba(26,115,232,0.4);
 }
 
 .animate-shimmer {
@@ -44,10 +63,6 @@
 
 ::-webkit-scrollbar-thumb:hover {
   background: #1a73e8;
-}
-
-.mask-fade-right {
-  mask-image: linear-gradient(to right, black 85%, transparent 100%);
 }
 
 .scrollbar-hide::-webkit-scrollbar {

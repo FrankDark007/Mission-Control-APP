@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
-import { BookOpen, Plus, Tag, Clock, Code, Copy, Trash2, Edit3, Save, ChevronRight, Hash, Star, Layers, Search } from 'lucide-react';
+import { BookOpen, Plus, Tag, Clock, Code, Copy, Trash2, Edit3, Save, ChevronRight, Hash, Star, Layers, Search, ShieldCheck, AlertCircle } from 'lucide-react';
+import { qualityGate } from '../services/qualityGate';
 
 interface PromptDefinition {
     id: string;
@@ -16,13 +17,30 @@ const PromptLab = () => {
     const [isAdding, setIsAdding] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
     const [newPrompt, setNewPrompt] = useState({ name: '', content: '', tags: [] as string[] });
+    const [qualityReport, setQualityReport] = useState<any>(null);
 
     useEffect(() => {
         fetch('/api/prompts').then(r => r.json()).then(setPrompts);
     }, []);
 
+    useEffect(() => {
+        if (newPrompt.content) {
+            const timer = setTimeout(async () => {
+                const report = await qualityGate.analyze(newPrompt.content);
+                setQualityReport(report);
+            }, 500);
+            return () => clearTimeout(timer);
+        } else {
+            setQualityReport(null);
+        }
+    }, [newPrompt.content]);
+
     const savePrompt = async () => {
         if (!newPrompt.name || !newPrompt.content) return;
+        if (qualityReport?.status === 'failed') {
+            alert("Quality Gate Refused: Fix critical grammar/clarity issues before committing.");
+            return;
+        }
         const res = await fetch('/api/prompts', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -66,28 +84,73 @@ const PromptLab = () => {
             </div>
 
             {isAdding && (
-                <div className="bg-dark-800 p-10 rounded-[2.5rem] border border-google-blue/30 shadow-2xl space-y-8 animate-in slide-in-from-top-4">
-                    <div className="space-y-2">
-                        <label className="text-[10px] font-black uppercase tracking-widest text-gray-500">Strategy Name</label>
-                        <input 
-                            value={newPrompt.name}
-                            onChange={e => setNewPrompt({...newPrompt, name: e.target.value})}
-                            className="w-full bg-dark-900 border border-dark-700 p-4 rounded-xl focus:border-google-blue outline-none text-sm text-white" 
-                            placeholder="e.g., Tactical UI Reviewer" 
-                        />
+                <div className="bg-dark-800 p-10 rounded-[2.5rem] border border-google-blue/30 shadow-2xl space-y-8 animate-in slide-in-from-top-4 grid grid-cols-1 lg:grid-cols-3 gap-10">
+                    <div className="lg:col-span-2 space-y-8">
+                        <div className="space-y-2">
+                            <label className="text-[10px] font-black uppercase tracking-widest text-gray-500">Strategy Name</label>
+                            <input 
+                                value={newPrompt.name}
+                                onChange={e => setNewPrompt({...newPrompt, name: e.target.value})}
+                                className="w-full bg-dark-900 border border-dark-700 p-4 rounded-xl focus:border-google-blue outline-none text-sm text-white" 
+                                placeholder="e.g., Tactical UI Reviewer" 
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <label className="text-[10px] font-black uppercase tracking-widest text-gray-500">Neural Payload</label>
+                            <textarea 
+                                value={newPrompt.content}
+                                onChange={e => setNewPrompt({...newPrompt, content: e.target.value})}
+                                className="w-full bg-dark-900 border border-dark-700 p-6 rounded-3xl focus:border-google-blue outline-none text-[11px] font-mono text-gray-400 h-64 resize-none shadow-inner"
+                                placeholder="Enter the prompt content here. Use {{variable}} for dynamic injection..."
+                            />
+                        </div>
+                        <div className="flex gap-4">
+                            <button 
+                                onClick={savePrompt} 
+                                disabled={qualityReport?.status === 'failed'}
+                                className={`px-8 py-3 rounded-xl font-black uppercase tracking-widest transition-all shadow-lg ${qualityReport?.status === 'failed' ? 'bg-dark-700 text-gray-500' : 'bg-google-green text-dark-900 hover:scale-105'}`}
+                            >
+                                Commit Strategy
+                            </button>
+                            <button onClick={() => setIsAdding(false)} className="text-gray-500 px-8 py-3 rounded-xl font-black uppercase tracking-widest">Abort</button>
+                        </div>
                     </div>
-                    <div className="space-y-2">
-                        <label className="text-[10px] font-black uppercase tracking-widest text-gray-500">Neural Payload</label>
-                        <textarea 
-                            value={newPrompt.content}
-                            onChange={e => setNewPrompt({...newPrompt, content: e.target.value})}
-                            className="w-full bg-dark-900 border border-dark-700 p-6 rounded-3xl focus:border-google-blue outline-none text-[11px] font-mono text-gray-400 h-64 resize-none shadow-inner"
-                            placeholder="Enter the prompt content here. Use {{variable}} for dynamic injection..."
-                        />
-                    </div>
-                    <div className="flex gap-4">
-                        <button onClick={savePrompt} className="bg-google-green text-dark-900 px-8 py-3 rounded-xl font-black uppercase tracking-widest hover:scale-105 transition-all shadow-lg">Commit Strategy</button>
-                        <button onClick={() => setIsAdding(false)} className="text-gray-500 px-8 py-3 rounded-xl font-black uppercase tracking-widest">Abort</button>
+
+                    <div className="lg:col-span-1 bg-dark-900 p-8 rounded-[2rem] border border-dark-700 flex flex-col gap-6">
+                        <div className="flex items-center justify-between">
+                            <h4 className="text-[10px] font-black uppercase text-gray-500 tracking-widest flex items-center gap-2">
+                                <ShieldCheck className="text-google-blue" size={12} /> Grammarly Gate
+                            </h4>
+                            {qualityReport && (
+                                <span className={`text-[10px] font-black px-2 py-0.5 rounded ${qualityReport.status === 'passed' ? 'bg-google-green/10 text-google-green' : 'bg-google-red/10 text-google-red'}`}>
+                                    Score: {qualityReport.score}%
+                                </span>
+                            )}
+                        </div>
+
+                        {qualityReport ? (
+                            <div className="space-y-6">
+                                <div className="space-y-3">
+                                    {qualityReport.issues.map((issue: any, i: number) => (
+                                        <div key={i} className="flex gap-3 p-4 bg-dark-800 border border-dark-700 rounded-xl">
+                                            <AlertCircle className="text-google-red shrink-0" size={14} />
+                                            <p className="text-[10px] text-gray-300 font-medium">[{issue.type.toUpperCase()}] {issue.msg}</p>
+                                        </div>
+                                    ))}
+                                    {qualityReport.issues.length === 0 && (
+                                        <div className="flex flex-col items-center justify-center py-10 opacity-30 text-center">
+                                            <ShieldCheck size={40} className="text-google-green mb-2" />
+                                            <p className="text-[10px] font-black uppercase tracking-widest">Quality Enforced</p>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="flex flex-col items-center justify-center py-20 opacity-10">
+                                <BookOpen size={48} />
+                                <p className="text-[8px] font-black uppercase tracking-widest mt-4">Awaiting Input Analysis</p>
+                            </div>
+                        )}
                     </div>
                 </div>
             )}
