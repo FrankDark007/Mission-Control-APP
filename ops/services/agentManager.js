@@ -5,7 +5,6 @@ import { tmpdir } from 'os';
 
 /**
  * Manages the lifecycle of multiple background AI agents and recursive sub-agents.
- * Restored: Robust environment variable parsing for virtualized agent contexts.
  */
 export class AgentManager {
     constructor(io, registry, gitService) {
@@ -13,7 +12,8 @@ export class AgentManager {
         this.registry = registry;
         this.gitService = gitService;
         this.processes = {};
-        this.subAgents = {}; // Track recursive spawns
+        this.subAgents = {};
+        this.approvals = {}; // Feature 9
     }
 
     start(agentId, args = null) {
@@ -21,7 +21,17 @@ export class AgentManager {
         if (!config) throw new Error(`Agent ${agentId} not found in registry.`);
         if (this.processes[agentId]) return { success: false, message: 'Agent is already running.' };
 
-        return this._spawnProcess(agentId, config.command, args || config.safeArgs, config.path, config.name);
+        // Feature 8: Safe-args mapping
+        const finalArgs = args || config.safeArgs || ['--chrome'];
+        return this._spawnProcess(agentId, config.command, finalArgs, config.path, config.name);
+    }
+
+    resumeProcess(agentId) {
+        if (this.approvals[agentId]) {
+            this.io.emit('log', { agentId, type: 'system', message: '✅ Human approval received. Resuming mission...', timestamp: new Date().toISOString() });
+            delete this.approvals[agentId];
+            this.broadcastStatus();
+        }
     }
 
     /**
@@ -42,7 +52,10 @@ export class AgentManager {
         try {
             await this.gitService.addWorktree(worktreePath, branchName);
             
-            const process = this._spawnProcess(subId, parentConfig.command, ['--chrome'], worktreePath, taskName, parentId);
+            // Feature 8: Map sub-agent args based on parent role
+            const subArgs = parentConfig.id === 'design' ? ['--chrome', '--css-framework tailwind'] : ['--chrome'];
+            
+            const process = this._spawnProcess(subId, parentConfig.command, subArgs, worktreePath, taskName, parentId);
             this.subAgents[subId] = { parentId, worktreePath, taskName };
             
             return { success: true, subId, path: worktreePath };
@@ -52,7 +65,6 @@ export class AgentManager {
     }
 
     _spawnProcess(id, command, args, path, name, parentId = null) {
-        // Feature 9 Restoration: Parse virtual env variables from args (e.g. MISSION_SCOPE=full)
         const finalArgs = [];
         const customEnv = {};
         
@@ -68,7 +80,7 @@ export class AgentManager {
         const env = { 
             ...process.env, 
             FORCE_COLOR: '1', 
-            ...customEnv // Inject virtualized variables
+            ...customEnv 
         };
         
         try {
@@ -86,13 +98,21 @@ export class AgentManager {
             child.stdout.on('data', (d) => this._log(id, d, 'stdout'));
             child.stderr.on('data', (d) => this._log(id, d, 'stderr'));
 
+            // Feature 9: Detect approval requirements (Mock logic)
+            child.stdout.on('data', (d) => {
+                if (d.toString().toLowerCase().includes('waiting for your approval')) {
+                    this.approvals[id] = true;
+                    this.broadcastStatus();
+                }
+            });
+
             child.on('close', async (code) => {
                 delete this.processes[id];
+                delete this.approvals[id];
                 this.broadcastStatus();
                 
                 if (this.subAgents[id]) {
                     const { worktreePath } = this.subAgents[id];
-                    this.io.emit('log', { agentId: id, type: 'system', message: `🍂 Task complete. Cleaning up worktree...`, timestamp: new Date().toISOString() });
                     try { await this.gitService.removeWorktree(worktreePath); } catch(e){}
                     delete this.subAgents[id];
                 }
@@ -112,7 +132,10 @@ export class AgentManager {
     }
 
     _log(agentId, data, type) {
-        this.io.emit('log', { agentId, type, message: data.toString(), timestamp: new Date().toISOString() });
+        const log = data.toString();
+        this.io.emit('log', { agentId, type, message: log, timestamp: new Date().toISOString() });
+        // Feature 1: Signal to healing engine
+        this.io.emit('agent-log-internal', { agentId, log });
     }
 
     stop(agentId) {
@@ -125,8 +148,11 @@ export class AgentManager {
 
     getStatus() {
         const status = {};
-        Object.keys(this.registry).forEach(id => { status[id] = this.processes[id] ? 'running' : 'stopped'; });
-        Object.keys(this.subAgents).forEach(id => { status[id] = this.processes[id] ? 'running' : 'stopped'; });
+        const allIds = [...Object.keys(this.registry), ...Object.keys(this.subAgents)];
+        allIds.forEach(id => { 
+            if (this.approvals[id]) status[id] = 'waiting_approval';
+            else status[id] = this.processes[id] ? 'running' : 'stopped'; 
+        });
         return status;
     }
 

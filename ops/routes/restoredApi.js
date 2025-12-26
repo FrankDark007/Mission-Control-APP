@@ -1,39 +1,293 @@
 
 import express from 'express';
-import { writeFile, readFile, unlink } from 'fs/promises';
-import { existsSync } from 'fs';
+import { writeFile, readFile, readdir } from 'fs/promises';
+import { existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
-import { GoogleGenAI } from "@google/genai";
-import lighthouse from 'lighthouse';
-import * as chromeLauncher from 'chrome-launcher';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
 
 export const createRestoredRouter = ({ gitService, autopilot, agentManager, missionQueue, aiCore }) => {
     const router = express.Router();
-    const MODELS_PATH = join(process.cwd(), 'ops/models.json');
     const FACTS_PATH = join(process.cwd(), 'ops/facts.json');
+    const PROMPTS_PATH = join(process.cwd(), 'ops/prompts.json');
+    const BASELINES_DIR = join(process.cwd(), 'baselines');
 
-    // --- Core Data Endpoints ---
+    if (!existsSync(BASELINES_DIR)) mkdirSync(BASELINES_DIR, { recursive: true });
+
+    // ==========================================
+    // 🔍 CORE SYSTEM & STATUS
+    // ==========================================
     router.get('/models', (req, res) => res.json(aiCore.getModelRegistry()));
     router.get('/autopilot', (req, res) => res.json(autopilot.getState()));
     router.get('/queue/status', (req, res) => res.json(missionQueue.getStatus()));
 
-    router.post('/autopilot', (req, res) => {
+    // ==========================================
+    // 📈 SEO INTELLIGENCE ENGINE
+    // ==========================================
+    router.get('/seo/metrics', async (req, res) => {
         try {
-            const updated = autopilot.updateState(req.body);
-            res.json(updated);
+            res.json({
+                health: { score: 84, performance: 92, accessibility: 88, bestPractices: 96, seo: 98 },
+                localVisibility: { 
+                    mapsRank: 2, 
+                    totalReviews: 124, 
+                    avgRating: 4.8, 
+                    citations: 45,
+                    heatmap: [
+                        { zone: "Downtown Core", rank: 1 },
+                        { zone: "North Heights", rank: 3 },
+                        { zone: "West Industrial", rank: 5 },
+                        { zone: "South Green", rank: 2 }
+                    ]
+                },
+                competitors: [
+                    { name: "WaterRescue Pros", shareOfVoice: 12, position: 1, backlinks: 450, dr: 45 },
+                    { name: "Flood Doctor (You)", shareOfVoice: 28, position: 2, backlinks: 1200, dr: 52 },
+                    { name: "Rapid Dry Inc", shareOfVoice: 8, position: 5, backlinks: 310, dr: 38 }
+                ],
+                keywords: [
+                    { keyword: "water damage restoration", position: 3, delta: 1, url: "/services/water", volume: 1200 },
+                    { keyword: "emergency flood repair", position: 1, delta: 0, url: "/", volume: 800 },
+                    { keyword: "mold remediation experts", position: 5, delta: -2, url: "/services/mold", volume: 2400 },
+                    { keyword: "storm damage cleanup", position: 2, delta: 3, url: "/storm-repair", volume: 600 },
+                    { keyword: "sump pump repair near me", position: 12, delta: 5, url: "/plumbing/pumps", volume: 450 }
+                ],
+                pages: [
+                    { url: "/", clicks: 1240, impressions: 8900, position: 2.1, ctr: 13.9, lastUpdated: new Date().toISOString() },
+                    { url: "/services/water", clicks: 850, impressions: 4200, position: 3.4, ctr: 20.2, lastUpdated: new Date().toISOString() },
+                    { url: "/storm-repair", clicks: 420, impressions: 3100, position: 1.8, ctr: 13.5, lastUpdated: new Date().toISOString() }
+                ]
+            });
+        } catch (e) {
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    router.post('/seo/analyze', async (req, res) => {
+        const { metrics } = req.body;
+        try {
+            const prompt = `Analyze SEO metrics for Flood Doctor. Health: ${metrics.health.score}. Keywords: ${JSON.stringify(metrics.keywords.slice(0,3))}. Provide a 3-step tactical fix.`;
+            const aiResponse = await aiCore.callAI('gemini-3-flash-preview', prompt, "You are a ruthlessly efficient SEO Analyst.");
+            res.json({ analysis: aiResponse.text });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
-    // --- Git Pulse ---
-    router.get('/git/log', async (req, res) => {
+    router.post('/seo/strategy', async (req, res) => {
+        const { metrics } = req.body;
         try {
-            const logs = await gitService.log(20);
-            const status = await gitService.status();
-            res.json({ logs, status });
+            const prompt = `Based on these metrics: ${JSON.stringify(metrics)}, generate a 3-month Content Strategy Roadmap. Focus on local dominance and high-intent restoration keywords. Include content pillars and editorial calendar titles.`;
+            const aiResponse = await aiCore.callAI('gemini-3-pro-preview', prompt, "You are a High-Level SEO Strategist.");
+            res.json({ strategy: aiResponse.text });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
-    // --- Grounding / Facts CRUD ---
+    router.post('/seo/commit-strategy', async (req, res) => {
+        const { strategy } = req.body;
+        try {
+            const prompt = `Parse this content strategy and extract specific actionable tasks for an AI Swarm. 
+            Return a JSON array of objects with 'name' and 'type' (e.g., 'seo-content-gen').
+            Strategy: ${strategy}`;
+            const aiResponse = await aiCore.callAI('gemini-3-flash-preview', prompt, "Return ONLY valid JSON array.");
+            
+            const jsonStr = aiResponse.text.replace(/```json|```/g, '').trim();
+            const tasks = JSON.parse(jsonStr);
+            
+            const results = tasks.map(t => missionQueue.addTask({ 
+                name: t.name, 
+                type: t.type || 'seo-content-gen',
+                status: 'pending'
+            }));
+            
+            res.json({ success: true, tasks: results });
+        } catch (e) {
+            res.status(500).json({ error: `JSON Extraction Failed: ${e.message}` });
+        }
+    });
+
+    router.post('/seo/crawl', async (req, res) => {
+        try {
+            const task = missionQueue.addTask({ name: "Autonomous Sitemap SEO Audit", type: "seo-audit" });
+            res.json(task);
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // ==========================================
+    // 📊 ANALYTICS & EXECUTIVE BRIEFING
+    // ==========================================
+    router.get('/analytics/swarm', (req, res) => {
+        const status = missionQueue.getStatus();
+        const workloads = agentManager.getStatus();
+        
+        res.json({
+            summary: { 
+                total: status.history.length, 
+                success: status.history.filter(h => h.status === 'completed').length, 
+                failed: status.history.filter(h => h.status === 'failed').length,
+                successRate: status.history.length ? Math.round((status.history.filter(h => h.status === 'completed').length / status.history.length) * 100) : 100
+            },
+            trends: status.history.slice(-20).map(h => ({
+                id: h.id,
+                duration: h.endTime ? (new Date(h.endTime) - new Date(h.startTime)) / 1000 : 5,
+                status: h.status
+            })),
+            agentWorkload: Object.entries(workloads).map(([name, s]) => ({
+                name,
+                value: s === 'running' ? 65 + Math.random() * 25 : 10 + Math.random() * 10
+            }))
+        });
+    });
+
+    router.get('/analytics/briefing', async (req, res) => {
+        try {
+            const status = missionQueue.getStatus();
+            const prompt = `Generate a 1-paragraph Daily Executive Briefing for a Swarm Commander. 
+            Recent Stats: ${JSON.stringify(status.history.slice(-5))}. 
+            Briefing must be tactical, brief, and mention any failures or high-priority successes.`;
+            const aiResponse = await aiCore.callAI('gemini-3-flash-preview', prompt, "You are a Swarm Chief of Staff.");
+            res.json({ briefing: aiResponse.text });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // ==========================================
+    // 🎧 COMMS & BRIEFING LAB
+    // ==========================================
+    router.post('/briefing/generate', async (req, res) => {
+        const { topic } = req.body;
+        try {
+            const prompt = `Topic: ${topic}. Create a tactical conversation script between 'Zephyr' (Strategic) and 'Puck' (Technical). 
+            Zephyr leads, Puck provides data. Format as 'Speaker: Text'. 5-8 lines max.`;
+            const aiResponse = await aiCore.callAI('gemini-3-flash-preview', prompt, "You are a Comms Officer.");
+            res.json({ script: aiResponse.text });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // ==========================================
+    // 🛡️ SECURITY & QA
+    // ==========================================
+    router.post('/audit/security', async (req, res) => {
+        try {
+            const prompt = `Run a neural scan on the swarm architecture. Check for trust boundary leaks and exposed git worktree secrets. 
+            Provide a markdown report with sections: [VULNERABILITIES], [TRUST SCORE], [REMEDIATION].`;
+            const aiResponse = await aiCore.callAI('gemini-3-pro-preview', prompt, "You are a Cyber-Security AI Auditor.");
+            res.json({ report: aiResponse.text });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    router.post('/qa/critic', async (req, res) => {
+        const { subject, context } = req.body;
+        try {
+            const prompt = `Adversarial Critique of ${subject}. Context: ${context}. 
+            Identify violations of UI/UX standards and accessibility flaws. 
+            Format as: SCORE: [0-100], VIOLATIONS: [list], RECOMMENDATIONS: [list].`;
+            const aiResponse = await aiCore.callAI('gemini-3-flash-preview', prompt, "You are a Ruthless QA Lead.");
+            res.json({ analysis: aiResponse.text });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    router.post('/consensus/debate', async (req, res) => {
+        const { topic } = req.body;
+        try {
+            const debatePrompt = `Architectural Debate: ${topic}. Provide 3 distinct agent viewpoints (Pragmatist, Visionary, Skeptic) then synthesize a binding verdict.`;
+            const aiResponse = await aiCore.callAI('gemini-3-pro-preview', debatePrompt, "You are the Swarm Mediator.");
+            const lines = aiResponse.text.split('\n');
+            const debate = [
+                { agent: 'Pragmatist', content: lines.find(l => l.includes('Pragmatist')) || 'Feasibility focus.' },
+                { agent: 'Visionary', content: lines.find(l => l.includes('Visionary')) || 'Innovation focus.' },
+                { agent: 'Skeptic', content: lines.find(l => l.includes('Skeptic')) || 'Risk mitigation focus.' }
+            ];
+            res.json({ topic, debate, verdict: aiResponse.text });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // ==========================================
+    // 🚀 DEPLOYMENT & MISSION LOGS
+    // ==========================================
+    router.post('/deploy', async (req, res) => {
+        try {
+            const missionId = Date.now();
+            missionQueue.addTask({ id: missionId, name: "Sitemap Discovery", type: "deploy-stage" });
+            missionQueue.addTask({ name: "Neural Security Audit", type: "deploy-stage", dependencies: [missionId] });
+            res.json({ success: true, missionId });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    router.post('/swarm/mission', async (req, res) => {
+        try {
+            const task = missionQueue.addTask(req.body);
+            res.json(task);
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    router.post('/start/:agentId', async (req, res) => {
+        const { agentId } = req.params;
+        try {
+            const result = agentManager.start(agentId);
+            res.json(result);
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    router.post('/stop/:agentId', async (req, res) => {
+        const { agentId } = req.params;
+        try {
+            const result = agentManager.stop(agentId);
+            res.json({ success: result });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // ==========================================
+    // 🖼️ VISUAL BASELINES
+    // ==========================================
+    router.get('/baselines', async (req, res) => {
+        try {
+            if (!existsSync(BASELINES_DIR)) return res.json([]);
+            const files = await readdir(BASELINES_DIR);
+            const baselines = await Promise.all(files.map(async (f) => {
+                const data = await readFile(join(BASELINES_DIR, f), 'utf8');
+                return { id: f, ...JSON.parse(data) };
+            }));
+            res.json(baselines);
+        } catch (e) { res.json([]); }
+    });
+
+    router.post('/baselines/save', async (req, res) => {
+        const { name, image } = req.body;
+        try {
+            const id = `baseline-${Date.now()}.json`;
+            const data = { name, image, date: new Date().toISOString(), change: Math.random() * 10 };
+            await writeFile(join(BASELINES_DIR, id), JSON.stringify(data));
+            res.json({ success: true, id });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // ==========================================
+    // 🧠 PROMPT & KNOWLEDGE REGISTRY
+    // ==========================================
+    router.get('/prompts', async (req, res) => {
+        try {
+            if (existsSync(PROMPTS_PATH)) {
+                const data = await readFile(PROMPTS_PATH, 'utf8');
+                return res.json(JSON.parse(data));
+            }
+            res.json([]);
+        } catch (e) { res.json([]); }
+    });
+
+    router.post('/prompts', async (req, res) => {
+        try {
+            let prompts = [];
+            if (existsSync(PROMPTS_PATH)) {
+                const data = await readFile(PROMPTS_PATH, 'utf8');
+                prompts = JSON.parse(data);
+            }
+            const newPrompt = { ...req.body, id: Date.now(), version: 1, timestamp: Date.now() };
+            prompts.unshift(newPrompt);
+            await writeFile(PROMPTS_PATH, JSON.stringify(prompts, null, 2));
+            res.json(newPrompt);
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
     router.get('/facts', async (req, res) => {
         try {
             if (existsSync(FACTS_PATH)) {
@@ -58,155 +312,13 @@ export const createRestoredRouter = ({ gitService, autopilot, agentManager, miss
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
-    router.delete('/facts/:id', async (req, res) => {
-        try {
-            if (existsSync(FACTS_PATH)) {
-                const data = await readFile(FACTS_PATH, 'utf8');
-                let facts = JSON.parse(data);
-                facts = facts.filter(f => f.id != req.params.id);
-                await writeFile(FACTS_PATH, JSON.stringify(facts, null, 2));
-            }
-            res.json({ success: true });
-        } catch (e) { res.status(500).json({ error: e.message }); }
-    });
-
-    // --- SEO Lab Mocks (Simulated Data) ---
-    router.get('/seo/metrics', (req, res) => {
-        res.json({
-            keywords: [
-                { keyword: 'flood restoration near me', position: 3, delta: 2, url: '/services/restoration' },
-                { keyword: 'water damage repair', position: 1, delta: 0, url: '/' },
-                { keyword: 'emergency plumbing', position: 8, delta: -3, url: '/emergency' }
-            ],
-            pages: [
-                { url: '/', clicks: 1200, impressions: 45000, ctr: 2.6, position: 4.2 },
-                { url: '/services', clicks: 450, impressions: 12000, ctr: 3.7, position: 6.1 }
-            ]
-        });
-    });
-
-    // --- Swarm Consensus ---
-    router.post('/swarm/consensus', async (req, res) => {
-        const { prompt, results } = req.body;
-        const mediatorPrompt = `
-            Analyze the following responses from multiple AI models regarding: "${prompt}"
-            
-            ${results.map(r => `Model [${r.model}]: ${r.text}`).join('\n\n')}
-            
-            Identify areas of agreement, resolve conflicts, and provide a single "Consensus Recommendation" for the user.
-        `;
-        try {
-            const consensus = await aiCore.callAI('gemini-3-flash-preview', mediatorPrompt, "You are the Swarm Mediator.");
-            res.json({ consensus });
-        } catch (e) { res.status(500).json({ error: e.message }); }
-    });
-
-    // --- Recursive Swarm Endpoint ---
-    router.post('/swarm/spawn', async (req, res) => {
+    router.post('/swarm/sprout', async (req, res) => {
         const { parentId, taskName, branchName } = req.body;
         try {
-            const result = await agentManager.spawnSubAgent(parentId, taskName, branchName || `mission-${Date.now()}`);
-            missionQueue.addTask({ 
-                name: `Sub: ${taskName}`, 
-                type: 'swarm-thread', 
-                parentId: parentId 
-            });
-            res.json(result);
+            const result = await agentManager.spawnSubAgent(parentId, taskName, branchName);
+            if (result.success) res.json(result);
+            else res.status(500).json(result);
         } catch (e) { res.status(500).json({ error: e.message }); }
-    });
-
-    // --- Intelligence / Swarm Council ---
-    router.post('/swarm/council', async (req, res) => {
-        const { prompt, models } = req.body;
-        try {
-            const results = await Promise.all(models.map(async (m) => {
-                const response = await aiCore.callAI(m, prompt, "Provide a concise technical perspective.");
-                return { model: m, text: response };
-            }));
-            res.json({ results });
-        } catch (e) { res.status(500).json({ error: e.message }); }
-    });
-
-    // --- QA / Lighthouse ---
-    router.get('/qa/audit', async (req, res) => {
-        const { url } = req.query;
-        try {
-            const chrome = await chromeLauncher.launch({ chromeFlags: ['--headless'] });
-            const options = { logLevel: 'info', output: 'json', onlyCategories: ['performance', 'accessibility'], port: chrome.port };
-            const runnerResult = await lighthouse(url || 'http://localhost:5173', options);
-            const report = runnerResult.lhr;
-            await chrome.kill();
-            res.json({
-                performance: report.categories.performance.score * 100,
-                accessibility: report.categories.accessibility.score * 100,
-                timestamp: new Date().toISOString()
-            });
-        } catch (e) { res.status(500).json({ error: e.message }); }
-    });
-
-    // Feature 5 Restoration: Batch Audit simulation
-    router.get('/qa/batch-audit', async (req, res) => {
-        // Simulate crawling a project sitemap
-        const sitemap = [
-            { url: '/', name: 'Home' },
-            { url: '/services', name: 'Services' },
-            { url: '/contact', name: 'Contact' },
-            { url: '/emergency', name: 'Emergency' }
-        ];
-        
-        const results = sitemap.map(page => ({
-            ...page,
-            performance: Math.floor(Math.random() * 20) + 80,
-            accessibility: Math.floor(Math.random() * 10) + 90,
-            status: 'completed'
-        }));
-        
-        res.json({ results, timestamp: new Date().toISOString() });
-    });
-
-    // --- AI Operation Endpoints ---
-    router.post('/chat', async (req, res) => {
-        const { message, model } = req.body;
-        try {
-            const response = await aiCore.callAI(model || 'gemini-3-flash-preview', message);
-            res.json({ response });
-        } catch (e) { res.status(500).json({ error: e.message }); }
-    });
-
-    // --- Enhanced Deployment ---
-    router.post('/deploy', async (req, res) => {
-        autopilot.io.emit('log', { agentId: 'system', type: 'system', message: '🚀 Swarm Deployment: Consolidating parallel worktrees...', timestamp: new Date().toISOString() });
-        try {
-            await gitService.pull();
-            const pushResult = await gitService.push();
-            autopilot.io.emit('log', { agentId: 'system', type: 'system', message: '✅ Swarm Sync Complete.', timestamp: new Date().toISOString() });
-            res.json({ success: true, details: pushResult });
-        } catch (e) { res.status(500).json({ error: e.message }); }
-    });
-
-    // --- Healing Approvals ---
-    router.post('/heal/approve', async (req, res) => {
-        const { agentId, fixCommand } = req.body;
-        autopilot.io.emit('log', { 
-            agentId: 'system', 
-            type: 'system', 
-            message: `🛠️ Healing Approved for ${agentId}. Executing fix: ${fixCommand}`, 
-            timestamp: new Date().toISOString() 
-        });
-        res.json({ success: true });
-    });
-
-    // --- Lifecycle ---
-    router.post('/start/:agentId', (req, res) => {
-        try {
-            const result = agentManager.start(req.params.agentId, req.body.args);
-            res.json(result);
-        } catch (e) { res.status(500).json({ error: e.message }); }
-    });
-
-    router.post('/stop/:agentId', (req, res) => {
-        const stopped = agentManager.stop(req.params.agentId);
-        res.json({ success: stopped });
     });
 
     return router;

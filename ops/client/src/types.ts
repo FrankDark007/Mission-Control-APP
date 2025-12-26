@@ -4,6 +4,7 @@ export type AgentStatus = 'running' | 'stopped' | 'error' | 'waiting_approval';
 export type SwarmStatus = Record<string, AgentStatus>;
 
 export interface AgentConfig {
+    id: string;
     name: string;
     role?: string;
     path: string;
@@ -18,6 +19,8 @@ export interface LogMessage {
   type: 'stdout' | 'stderr' | 'system' | 'ai-proxy';
   message: string;
   timestamp: string;
+  level?: 'INFO' | 'WARN' | 'ERROR';
+  count?: number;
 }
 
 export type AiModelId = 
@@ -39,13 +42,27 @@ export interface AutoPilotConfig {
   model: AiModelId;
 }
 
+export interface GroundingChunk {
+  web?: { uri: string; title: string };
+  maps?: { uri: string; title: string };
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'ai';
   content: string;
-  modelUsed?: AiModelId;
+  modelUsed?: string;
   timestamp: number;
-  image?: string; // Base64 string for image display
+  image?: string; 
+  groundingChunks?: GroundingChunk[];
+}
+
+export interface ProjectFact {
+  id: number;
+  title: string;
+  content: string;
+  category: 'rule' | 'knowledge' | 'tech';
+  timestamp: string;
 }
 
 export interface HealingProposal {
@@ -54,9 +71,8 @@ export interface HealingProposal {
   fixCommand: string;
   explanation: string;
   timestamp: number;
+  failure?: boolean;
 }
-
-// --- Task Queue & Visualizer ---
 
 export interface TaskDefinition {
   id: number;
@@ -64,10 +80,13 @@ export interface TaskDefinition {
   name: string;
   status: 'pending' | 'processing' | 'completed' | 'failed';
   dependencies?: number[];
-  // Fix: Added parentId property to support recursive task hierarchy in the frontend
   parentId?: number | string | null;
   lastLog?: string;
   startTime?: string;
+  // endTime is set by missionQueue.js upon mission completion
+  endTime?: string;
+  // error is captured by missionQueue.js in case of failure
+  error?: string;
   created?: string;
   result?: any;
 }
@@ -76,31 +95,14 @@ export interface QueueResponse {
   processing: boolean;
   activeTasks: TaskDefinition[];
   queue: TaskDefinition[];
-  // Added history field to track completed tasks
   history: TaskDefinition[];
 }
 
-// --- Management & SEO Data ---
-
-export interface AuditScore {
-  performance: number;
-  accessibility: number;
-  bestPractices: number;
-  seo: number;
-}
-
-export interface GitCommit {
-  hash: string;
-  message: string;
-  date: string;
-  // Added author_name to match the data returned by simple-git
-  author_name?: string;
-}
-
-export interface FactDatabase {
-  project_name: string;
-  tech_stack: string[];
-  rules: string[];
+export interface KeywordRank {
+  keyword: string;
+  position: number;
+  delta: number;
+  url: string;
 }
 
 export interface SeoPageMetric {
@@ -112,15 +114,11 @@ export interface SeoPageMetric {
   lastUpdated: string;
 }
 
-export interface KeywordRank {
-  keyword: string;
-  position: number;
-  delta: number;
-  url: string;
-}
-
-export interface VisualAuditResult {
-    desktop: string;
-    mobile: string;
-    diff: number;
+// Added GitCommit interface to resolve module error in GitPulse.tsx
+export interface GitCommit {
+  hash: string;
+  date: string;
+  message: string;
+  author_name: string;
+  author_email: string;
 }
