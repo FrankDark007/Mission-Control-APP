@@ -10,6 +10,7 @@ const ChatLab = () => {
     const [isCapturing, setIsCapturing] = useState(false);
     const [thinkingBudget, setThinkingBudget] = useState(0); 
     const [useSensory, setUseSensory] = useState(false);
+    const [useLocation, setUseLocation] = useState(false);
     const [sensorySnapshot, setSensorySnapshot] = useState<string | null>(null);
     const [location, setLocation] = useState<{ latitude: number, longitude: number } | null>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
@@ -55,7 +56,8 @@ const ChatLab = () => {
         const currentInput = input;
         const currentBudget = thinkingBudget;
         const currentImage = sensorySnapshot;
-        
+        const currentLocation = useLocation ? location : null;
+
         setInput('');
         setSensorySnapshot(null);
         setIsLoading(true);
@@ -64,24 +66,23 @@ const ChatLab = () => {
             const res = await fetch('/api/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
+                body: JSON.stringify({
                     message: currentInput,
                     model: currentBudget > 0 ? 'gemini-3-pro-preview' : 'gemini-3-flash-preview',
                     systemInstruction: "You are the Tactical Swarm Commander. Analyze visual sensory payload if present.",
-                    latLng: location,
+                    latLng: currentLocation,
                     thinkingBudget: currentBudget,
                     image: currentImage
                 })
             });
             const data = await res.json();
-            
-            // Fix 2: data.text instead of data.content
+
             const aiMsg: ChatMessage = {
                 id: (Date.now() + 1).toString(),
                 role: 'ai',
                 content: data.text || "No response received.",
                 timestamp: Date.now(),
-                modelUsed: currentBudget > 0 ? 'gemini-3-pro-preview' : 'gemini-3-flash-preview',
+                modelUsed: currentLocation ? 'gemini-2.5-flash' : (currentBudget > 0 ? 'gemini-3-pro-preview' : 'gemini-3-flash-preview'),
                 groundingChunks: data.groundingChunks || []
             };
             setMessages(prev => [...prev, aiMsg]);
@@ -113,6 +114,16 @@ const ChatLab = () => {
                     >
                         {isCapturing ? <Loader2 className="animate-spin" size={14} /> : <Eye size={14} className={useSensory ? 'animate-pulse' : ''} />}
                         <span className="text-[10px] font-black uppercase hidden sm:inline">Sensory Eye</span>
+                    </button>
+                    <div className="w-px h-6 bg-dark-700 hidden sm:block" />
+                    <button
+                        onClick={() => setUseLocation(!useLocation)}
+                        disabled={!location}
+                        title={!location ? "Location access needed" : "Toggle Maps Grounding"}
+                        className={`flex items-center gap-2 px-2 md:px-3 py-1.5 rounded-lg md:rounded-xl transition-all ${useLocation ? 'bg-google-green text-white shadow-lg' : 'text-gray-400 hover:text-gray-300'} ${!location ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >
+                        <MapPin size={14} className={useLocation ? 'animate-bounce' : ''} />
+                        <span className="text-[10px] font-black uppercase hidden sm:inline">Location</span>
                     </button>
                     <div className="w-px h-6 bg-dark-700 hidden sm:block" />
                     <div className="flex items-center gap-2 md:gap-3">
@@ -219,7 +230,7 @@ const ChatLab = () => {
                             value={input}
                             onChange={(e) => setInput(e.target.value)}
                             onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                            placeholder={useSensory ? "Instruct swarm..." : "Query intelligence..."}
+                            placeholder={useSensory ? "Instruct swarm with visual analysis..." : useLocation ? "Query with geographic context..." : "Query architectural intelligence..."}
                             className="flex-1 bg-transparent border-none outline-none px-4 md:px-6 lg:px-8 py-3 md:py-4 lg:py-5 text-sm text-gray-200"
                         />
                         <button
