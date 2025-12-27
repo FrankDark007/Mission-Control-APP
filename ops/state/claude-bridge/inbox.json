@@ -1,0 +1,25 @@
+{
+  "tasks": [
+    {
+      "id": "task_89d87083",
+      "projectId": "flood-doctor-website",
+      "title": "Create homepage hero section",
+      "instructions": "Create a hero section with H1, subheadline, and CTA button. Use Tailwind CSS.",
+      "priority": "high",
+      "status": "pending",
+      "createdBy": "director",
+      "createdByModel": "gemini-3-pro",
+      "context": {},
+      "artifacts": [],
+      "dependencies": [],
+      "deadline": null,
+      "createdAt": "2025-12-27T05:27:44.829Z",
+      "acknowledgedAt": null,
+      "startedAt": null,
+      "completedAt": null,
+      "progress": 0,
+      "progressNotes": [],
+      "result": null
+    }
+  ]
+}

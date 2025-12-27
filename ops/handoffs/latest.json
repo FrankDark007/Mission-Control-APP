@@ -1,0 +1,215 @@
+{
+  "timestamp": "2025-12-27T00:15:00Z",
+  "phase": "V8",
+  "status": "COMPLETE",
+  "completed": [
+    "Phase 1: State Authority - StateStore.js (828 lines)",
+    "Phase 1: schema.js, ArtifactTypes.js",
+    "Phase 1: storage/state.json persistence",
+    "Phase 2: missionValidator.js (10KB) - contract enforcement",
+    "Phase 2: artifactValidator.js - artifact gates",
+    "Phase 2: Tool permission matrix by missionClass",
+    "Phase 3: rateLimitService.js (297 lines)",
+    "Phase 3: costEstimatorService.js (308 lines)",
+    "Phase 3: approvalPolicyService.js (267 lines)",
+    "Phase 4: FIXED - spawn_agent (recipe mode) vs spawn_agent_immediate (armed mode)",
+    "Phase 5: taskGraphService.js (520 lines) - dependency resolution, task types, gates",
+    "Phase 6: selfHealingService.js (603 lines) - diagnosis, proposals, idempotency, rollback",
+    "Phase 7: watchdogService.js (580 lines) - agent heartbeats, mission health, anomaly detection",
+    "Phase 7: rankingWatchdogService.js (520 lines) - ranking data freshness, volatility, local pack",
+    "Phase 8: MCP tools - 11 files created",
+    "Phase 9: Integration healthCheck() methods - 6 integrations + unified healthCheck",
+    "V8: Home/Start Screen - Project management entry point",
+    "V8: ProjectService.js - Full project lifecycle management",
+    "V8: HomeLab.tsx - Project list, stats, detail modals",
+    "V8: NewProjectWizard.tsx - 4-step project creation wizard",
+    "V8: Director agent spawning with bootstrap artifacts",
+    "V8: Mobile navigation updated with Home tab"
+  ],
+  "inProgress": [],
+  "pending": [],
+  "files_created": [
+    "ops/state/StateStore.js (828 lines)",
+    "ops/state/schema.js (178 lines)",
+    "ops/state/ArtifactTypes.js",
+    "ops/state/validators/missionValidator.js (10KB)",
+    "ops/state/validators/artifactValidator.js (4KB)",
+    "ops/services/rateLimitService.js (297 lines)",
+    "ops/services/costEstimatorService.js (308 lines)",
+    "ops/services/approvalPolicyService.js (267 lines)",
+    "ops/mcp/tools/sessionManager.js",
+    "ops/services/taskGraphService.js (520 lines)",
+    "ops/services/selfHealingService.js (603 lines)",
+    "ops/services/watchdogService.js (580 lines)",
+    "ops/services/rankingWatchdogService.js (520 lines)",
+    "ops/mcp/tools/mission.js",
+    "ops/mcp/tools/task.js",
+    "ops/mcp/tools/artifact.js",
+    "ops/mcp/tools/agent.js",
+    "ops/mcp/tools/approval.js",
+    "ops/mcp/tools/state.js",
+    "ops/mcp/tools/ranking.js",
+    "ops/mcp/tools/selfHeal.js",
+    "ops/mcp/tools/watchdog.js",
+    "ops/mcp/tools/provider.js",
+    "ops/mcp/tools/index.js",
+    "ops/services/projectService.js (350+ lines)",
+    "ops/client/src/components/HomeLab.tsx (400+ lines)",
+    "ops/client/src/components/NewProjectWizard.tsx (355 lines)"
+  ],
+  "files_modified": [
+    "ops/services/agentManager.js - V7 hybrid execution model (spawnAgent + spawnAgentImmediate)",
+    "ops/mcp/tools/agent.js - Updated to use new V7 agent methods",
+    "ops/services/integrations/perplexity.js - added healthCheck()",
+    "ops/services/integrations/serp.js - added healthCheck()",
+    "ops/services/integrations/gsc.js - added healthCheck()",
+    "ops/services/integrations/ga4.js - added healthCheck()",
+    "ops/services/integrations/ahrefs.js - added healthCheck()",
+    "ops/services/integrations/refract.js - added healthCheck()",
+    "ops/services/integrations/index.js - added unified healthCheck()",
+    "ops/state/schema.js - V8 Project schemas (ProjectStatus, ProjectPhase, ProjectSchema)",
+    "ops/client/src/types.ts - V8 Project types (Project, DirectorModel, NewProjectData)",
+    "ops/server.js - V8 Project API routes and projectService integration",
+    "ops/client/src/App.tsx - V8 Home tab navigation",
+    "ops/client/src/components/ui/MobileDrawer.tsx - V8 Home in mobile nav groups",
+    "ops/client/src/components/ui/BottomNav.tsx - V8 Home as first bottom nav tab"
+  ],
+  "phase4_fix": {
+    "description": "Proper V7 hybrid execution model per Section 4 of spec",
+    "agentManager_changes": {
+      "spawnAgent": {
+        "mode": "recipe",
+        "behavior": "Returns recipe object with task details, steps, cost estimate - NO EXECUTION",
+        "always_available": true,
+        "returns": "{ recipe: { recipeId, task, model, prompt, steps, estimatedCost, worktree, expiresAt } }"
+      },
+      "spawnAgentImmediate": {
+        "mode": "immediate",
+        "behavior": "Actually spawns and executes Claude Code process",
+        "requires": "armedMode === true",
+        "gates_enforced": [
+          "Armed mode check",
+          "Cooldown: 60s between immediate execs",
+          "Mission limit: max 3 immediate spawns per hour",
+          "Risk level threshold check",
+          "Allowed tools validation",
+          "Required artifacts check",
+          "Cost budget check"
+        ],
+        "returns": "{ agentId, pid, status, worktreePath }"
+      },
+      "spawnClaudeAgent": {
+        "status": "deprecated",
+        "behavior": "Backward compatibility - maps to spawnAgentImmediate with forced armed mode"
+      }
+    },
+    "mcp_tools": {
+      "agent.spawn": "Calls agentManager.spawnAgent() - returns recipe, creates AGENT_RECIPE artifact",
+      "agent.spawn_immediate": "Calls agentManager.spawnAgentImmediate() - executes with gates",
+      "agent.execute_recipe": "NEW - Execute a previously generated recipe (requires armed mode)",
+      "agent.get_exec_stats": "NEW - Get cooldown and limit stats for a mission"
+    },
+    "constants": {
+      "IMMEDIATE_EXEC_COOLDOWN_MS": 60000,
+      "MAX_IMMEDIATE_PER_MISSION": 3
+    }
+  },
+  "mcpTools": {
+    "count": 11,
+    "categories": {
+      "mission": ["mission.create", "mission.get", "mission.list", "mission.update_status", "mission.delete", "mission.get_contract", "mission.check_gates"],
+      "task": ["task.create", "task.get", "task.list", "task.update_status", "task.get_ready", "task.check_gates", "task.get_dependencies", "task.create_batch"],
+      "artifact": ["artifact.create", "artifact.get", "artifact.list", "artifact.query", "artifact.validate", "artifact.check_gates"],
+      "agent": ["agent.spawn", "agent.spawn_immediate", "agent.execute_recipe", "agent.get_exec_stats", "agent.get_status", "agent.stop", "agent.send_input", "agent.get_logs", "agent.heartbeat", "agent.report_status"],
+      "approval": ["approval.request", "approval.decide", "approval.list_pending", "approval.get", "approval.auto_approve", "approval.get_policy", "approval.check_budget"],
+      "state": ["state.get_snapshot", "state.get_mission_summary", "state.is_armed", "state.arm", "state.disarm", "state.get_circuit_breaker", "state.reset_circuit_breaker", "state.get_system_health"],
+      "ranking": ["ranking.ingest", "ranking.get", "ranking.list", "ranking.create_artifact", "ranking.get_history", "ranking.compare"],
+      "selfHeal": ["selfHeal.diagnose", "selfHeal.propose", "selfHeal.apply", "selfHeal.block", "selfHeal.get_proposals", "selfHeal.rollback", "selfHeal.clear_history"],
+      "watchdog": ["watchdog.start", "watchdog.stop", "watchdog.force_tick", "watchdog.get_status", "watchdog.get_signals", "watchdog.get_active_issues", "watchdog.recover_agent", "watchdog.get_all_status", "watchdog.start_all", "watchdog.stop_all"],
+      "provider": ["provider.check_rate_limit", "provider.record_call", "provider.record_throttle", "provider.get_rate_status", "provider.get_quota_remaining", "provider.estimate_task_cost", "provider.estimate_agent_cost", "provider.record_actual_cost", "provider.get_cost_history", "provider.list_models", "provider.list_providers", "provider.health"]
+    }
+  },
+  "integrationHealthChecks": {
+    "perplexity": "API key validation + test query",
+    "gsc": "OAuth status + listSites API check",
+    "ga4": "OAuth status + client initialization check",
+    "ahrefs": "API key validation via subscription-info endpoint",
+    "refract": "API key validation via health endpoint",
+    "serp": "Scrape test or API validation",
+    "unified": "Aggregated health with overall/summary/services"
+  },
+  "watchdogService": {
+    "features": [
+      "Agent heartbeat monitoring (stale/dead detection)",
+      "Mission health checks (stuck/timeout detection)",
+      "Task health monitoring",
+      "Circuit breaker monitoring",
+      "Signal emission with signal_report artifacts",
+      "Auto-heal trigger integration with selfHealingService",
+      "Configurable thresholds (heartbeat, stale, dead, stuck)",
+      "Subscription system for real-time alerts"
+    ],
+    "exports": ["watchdogService", "WatchdogService", "WatchdogConfig", "SignalType"]
+  },
+  "rankingWatchdogService": {
+    "features": [
+      "Ranking data freshness monitoring",
+      "Rank drop detection (alert/critical thresholds)",
+      "Visibility score change tracking",
+      "Local pack entry/exit detection",
+      "Rank volatility analysis",
+      "Manual data ingestion for rank and local pack",
+      "Alert cooldown to prevent spam",
+      "Tracked keywords and locations management"
+    ],
+    "exports": ["rankingWatchdogService", "RankingWatchdogService", "RankingWatchdogConfig", "RankingSignalType"]
+  },
+  "architecture_notes": {
+    "hybrid_execution_model": {
+      "spawn_agent": "Recipe mode (default) - returns recipe object, operator executes manually",
+      "spawn_agent_immediate": "Armed mode only - actual execution with gates and cooldowns"
+    },
+    "task_gates": "work_gate, verification_gate, finalization_gate, artifact_gate",
+    "task_types": "work, verification, finalization (ordered execution)",
+    "state_authority": "StateStore is the single source of truth with contract enforcement"
+  },
+  "next_session_action": "V8 Home/Start Screen complete. Ready for testing project creation and director spawning.",
+  "v7_status": "IMPLEMENTATION_COMPLETE",
+  "v7_builder_endpoint": "/api/v7/build",
+  "v8_home_screen": {
+    "status": "IMPLEMENTATION_COMPLETE",
+    "features": [
+      "Project list with status/phase badges",
+      "Project stats row (total, active, planning, blocked)",
+      "New Project wizard (4 steps: Identity, Agent, Instructions, Confirm)",
+      "Project detail modal with full info",
+      "Director agent spawning from Home screen",
+      "Real-time updates via Socket.io",
+      "Mobile-responsive design with Home in bottom nav"
+    ],
+    "api_routes": [
+      "GET /api/projects - List all projects",
+      "GET /api/projects/stats - Project statistics",
+      "GET /api/projects/director-models - Available AI models",
+      "POST /api/projects - Create new project",
+      "GET /api/projects/:id - Get project by ID",
+      "PATCH /api/projects/:id/status - Update project status",
+      "PATCH /api/projects/:id/phase - Update project phase",
+      "POST /api/projects/:id/spawn-director - Spawn director agent",
+      "DELETE /api/projects/:id - Delete project"
+    ],
+    "project_lifecycle": {
+      "statuses": ["initialized", "planning", "active", "blocked", "needs_approval", "paused", "complete", "failed"],
+      "phases": ["bootstrap", "research", "planning", "execution", "review", "deployment", "maintenance"]
+    },
+    "director_agent": {
+      "spawn_mode": "recipe (armed mode optional for immediate)",
+      "bootstrap_artifact": "Contains project context, tools, constraints",
+      "constraints": [
+        "Cannot edit files directly - uses Mission Control MCP tools only",
+        "Must delegate file operations to sub-agents",
+        "Follows V7 hybrid execution model"
+      ]
+    }
+  }
+}

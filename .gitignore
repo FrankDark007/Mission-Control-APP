@@ -1,3 +1,9 @@
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+*.local
+
 # Logs
 logs
 *.log
@@ -23,3 +29,16 @@ dist-ssr
 *.sln
 *.sw?
 ops/facts.json
+
+# Agent worktrees (ephemeral)
+ops/worktrees/
+
+# Backup files
+*.backup
+*.v0-backup
+
+# MCP config (may contain secrets)
+.mcp.json
+
+# Test files
+ops/test.txt

@@ -1,490 +1,763 @@
+
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
-import { spawn, exec } from 'child_process';
-import { readFile, writeFile, copyFile, unlink, mkdir } from 'fs/promises';
-import { existsSync } from 'fs';
-import { join } from 'path';
-import { homedir } from 'os';
-import util from 'util';
-import { GoogleGenAI } from "@google/genai";
+import { readFile, writeFile, readdir } from 'fs/promises';
+import { existsSync, mkdirSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+import { GoogleGenAI, Modality } from "@google/genai";
 import 'dotenv/config';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import puppeteer from 'puppeteer';
-import cron from 'node-cron';
-import OpenAI from 'openai';
-import axios from 'axios';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const execAsync = promisify(exec);
+
+const PROJECT_ROOT = join(__dirname, '..');
+const MODELS_JSON = join(PROJECT_ROOT, 'ops', 'models.json');
+const FACTS_JSON = join(PROJECT_ROOT, 'facts.json');
+const SCREENSHOTS_DIR = join(PROJECT_ROOT, 'screenshots');
+
+if (!existsSync(SCREENSHOTS_DIR)) mkdirSync(SCREENSHOTS_DIR, { recursive: true });
+
+import { GitService } from './services/gitService.js';
+import { AutopilotService } from './services/autopilotService.js';
+import { AgentManager } from './services/agentManager.js';
+import { MissionQueue } from './services/missionQueue.js';
+import { AutopilotController } from './services/autopilotController.js';
+import { createRestoredRouter } from './routes/restoredApi.js';
+import { createMCPRouter } from './mcp/mcpServer.js';
+import { Integrations } from './services/integrations/index.js';
+import { stateStore } from './state/StateStore.js';
+import projectService from './services/projectService.js';
+import { claudeCodeBridge } from './services/claudeCodeBridge.js';
+import claudeBridgeRouter from './routes/claudeBridge.js';
+import { directorEngine } from './services/directorEngine.js';
+import { sentinelAgent } from './services/sentinelAgent.js';
+import sentinelRouter from './routes/sentinel.js';
 
 const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
-  }
+  cors: { origin: "*", methods: ["GET", "POST"] }
 });
-
-// Promisify exec for simple one-off commands
-const execAsync = util.promisify(exec);
 
 app.use(cors());
-
-// Chrome "Private Network Access" Support
-app.use((req, res, next) => {
-  if (req.headers['access-control-request-private-network']) {
-    res.setHeader('Access-Control-Allow-Private-Network', 'true');
-  }
-  next();
-});
-
 app.use(express.json({ limit: '50mb' }));
-app.use('/screenshots', express.static(join(process.cwd(), 'screenshots')));
+app.use('/screenshots', express.static(SCREENSHOTS_DIR));
 
-const PORT = 3001;
-const HOST = '127.0.0.1'; // Force IPv4 loopback for same-origin proxy consistency
-
-// ==========================================
-// 🧠 DYNAMIC CONFIGURATION LOADER
-// ==========================================
-
-let MODEL_REGISTRY = {};
-let GRAMMARLY_CONFIG = { clientId: '', clientSecret: '' };
-let CLOUDFLARE_CONFIG = { accountId: '', apiToken: '' };
-
-async function loadConfigs() {
-    try {
-        const modelPath = join(process.cwd(), 'ops', 'models.json');
-        if (existsSync(modelPath)) {
-            const data = await readFile(modelPath, 'utf8');
-            const models = JSON.parse(data);
-            MODEL_REGISTRY = models.reduce((acc, m) => {
-                const apiKey = m.manualApiKey || process.env[m.apiKeyEnv] || process.env.API_KEY;
-                if (apiKey) {
-                    acc[m.id] = { ...m, apiKey };
-                }
-                return acc;
-            }, {});
-        }
-
-        const grammarlyPath = join(process.cwd(), 'ops', 'grammarly.json');
-        if (existsSync(grammarlyPath)) {
-            const data = await readFile(grammarlyPath, 'utf8');
-            GRAMMARLY_CONFIG = JSON.parse(data);
-        }
-
-        const cfPath = join(process.cwd(), 'ops', 'cloudflare.json');
-        if (existsSync(cfPath)) {
-            const data = await readFile(cfPath, 'utf8');
-            CLOUDFLARE_CONFIG = JSON.parse(data);
-        }
-    } catch (error) {
-        console.error('❌ Failed to load configurations:', error);
-    }
+if (process.env.NODE_ENV === 'production') {
+    app.use(express.static(join(__dirname, 'client/dist')));
 }
 
-await loadConfigs();
+const PORT = process.env.PORT || 3001;
+const FRONTEND_PORT = 4000;
+const IS_DOCKER = process.env.DOCKER_ENV === 'true';
 
-// ==========================================
-// ✍️ GRAMMARLY QUALITY GATE LOGIC
-// ==========================================
-
-async function getGrammarlyToken() {
-    if (!GRAMMARLY_CONFIG.clientId || !GRAMMARLY_CONFIG.clientSecret) {
-        throw new Error('Grammarly credentials not configured in Governance.');
-    }
-    try {
-        const auth = Buffer.from(`${GRAMMARLY_CONFIG.clientId}:${GRAMMARLY_CONFIG.clientSecret}`).toString('base64');
-        const response = await axios.post('https://auth.grammarly.com/oauth2/token', 'grant_type=client_credentials', {
-            headers: {
-                'Authorization': `Basic ${auth}`,
-                'Content-Type': 'application/x-www-form-urlencoded'
-            }
-        });
-        return response.data.access_token;
-    } catch (error) {
-        console.error('Grammarly Auth Error:', error.response?.data || error.message);
-        throw new Error('Failed to authenticate with Grammarly.');
-    }
-}
-
-// ==========================================
-// ☁️ CLOUDFLARE EDGE LOGIC
-// ==========================================
-
-async function callCloudflareAI(prompt, systemInstruction = "You are a specialized Cloudflare Edge assistant.") {
-    if (!CLOUDFLARE_CONFIG.accountId || !CLOUDFLARE_CONFIG.apiToken) {
-        throw new Error('Cloudflare credentials not configured in Governance.');
-    }
-
-    const model = "@cf/meta/llama-3.1-8b-instruct";
-    const url = `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_CONFIG.accountId}/ai/run/${model}`;
-
-    try {
-        const response = await axios.post(url, {
-            messages: [
-                { role: "system", content: systemInstruction },
-                { role: "user", content: prompt }
-            ]
-        }, {
-            headers: {
-                'Authorization': `Bearer ${CLOUDFLARE_CONFIG.apiToken}`,
-                'Content-Type': 'application/json'
-            }
-        });
-
-        if (!response.data.success) {
-            throw new Error(response.data.errors?.[0]?.message || 'Cloudflare AI execution failed.');
-        }
-
-        return response.data.result.response;
-    } catch (error) {
-        console.error('Cloudflare Edge Error:', error.response?.data || error.message);
-        throw new Error('Failed to offload task to Cloudflare Edge GPUs.');
-    }
-}
-
-// ==========================================
-// 🧠 AI CALLER (GEMINI/OPENAI)
-// ==========================================
-
-function isLocalAddress(url) {
-    try {
-        const hostname = new URL(url).hostname;
-        return hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.') || hostname.startsWith('10.');
-    } catch {
-        return true; 
-    }
-}
-
-async function callAI(modelKey, prompt, systemInstruction = "") {
-    const config = MODEL_REGISTRY[modelKey];
-    if (!config) throw new Error(`Model ${modelKey} not found or not configured.`);
-
-    if (config.provider === 'google') {
-        const ai = new GoogleGenAI({ apiKey: config.apiKey });
-        const response = await ai.models.generateContent({
-            model: config.apiModelId || 'gemini-3-pro-preview',
-            contents: prompt,
-            config: {
-                systemInstruction: systemInstruction || undefined
-            }
-        });
-        return response.text;
-    } else if (config.provider === 'openai' || config.provider === 'openai-compatible') {
-        const openai = new OpenAI({
-            apiKey: config.apiKey,
-            baseURL: config.baseUrl || undefined
-        });
-        const completion = await openai.chat.completions.create({
-            model: config.apiModelId,
-            messages: [
-                { role: "system", content: systemInstruction || "You are a helpful assistant." },
-                { role: "user", content: prompt }
-            ]
-        });
-        return completion.choices[0].message.content;
-    }
-    throw new Error(`Provider ${config.provider} not supported.`);
-}
-
-// API Routes
-app.get('/api/models', (req, res) => {
-    const list = Object.values(MODEL_REGISTRY).map(m => ({ id: m.id, name: m.name, provider: m.provider }));
-    res.json(list);
-});
-
-// Grammarly Routes
-app.get('/api/grammarly/config', (req, res) => {
-    res.json({ clientId: GRAMMARLY_CONFIG.clientId, hasSecret: !!GRAMMARLY_CONFIG.clientSecret });
-});
-
-app.post('/api/grammarly/config', async (req, res) => {
-    try {
-        GRAMMARLY_CONFIG = req.body;
-        const dir = join(process.cwd(), 'ops');
-        if (!existsSync(dir)) await mkdir(dir, { recursive: true });
-        await writeFile(join(dir, 'grammarly.json'), JSON.stringify(GRAMMARLY_CONFIG, null, 2));
-        res.json({ success: true });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.get('/api/grammarly/analytics', async (req, res) => {
-    try {
-        const token = await getGrammarlyToken();
-        const response = await axios.get('https://api.grammarly.com/v1/analytics/users', {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-        res.json(response.data);
-    } catch (e) {
-        res.json({
-            sessions: [14, 22, 19, 31, 42, 28, 35],
-            improvements: [9, 15, 12, 24, 32, 20, 29]
-        });
-    }
-});
-
-app.post('/api/grammarly/analyze', async (req, res) => {
-    const { text } = req.body;
-    try {
-        const token = await getGrammarlyToken();
-        const scoreReq = await axios.post('https://api.grammarly.com/v1/score_request', {
-            document_type: 'general',
-            feature_flags: ['ai_detection', 'plagiarism']
-        }, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const { score_request_id, file_upload_url } = scoreReq.data;
-        await axios.put(file_upload_url, text, { headers: { 'Content-Type': 'text/plain' } });
-        let result = null;
-        for (let i = 0; i < 15; i++) {
-            const statusReq = await axios.get(`https://api.grammarly.com/v1/score_request/${score_request_id}`, {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-            if (statusReq.data.status === 'COMPLETED') {
-                result = statusReq.data;
-                break;
-            }
-            await new Promise(r => setTimeout(r, 2000));
-        }
-        if (!result) throw new Error('Grammarly analysis timed out after 30 seconds.');
-        res.json({
-            general_score: result.scores?.overall || result.scores?.general || 85,
-            ai_generated_percentage: result.scores?.ai_detection?.probability || result.scores?.ai_detection?.percentage || 12,
-            originality: result.scores?.plagiarism?.originality || 98,
-            correctness: result.scores?.correctness || 90,
-            clarity: result.scores?.clarity || 88,
-            engagement: result.scores?.engagement || 82,
-            delivery: result.scores?.delivery || 95
-        });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// Cloudflare Routes
-app.get('/api/edge/config', (req, res) => {
-    res.json({ accountId: CLOUDFLARE_CONFIG.accountId, hasToken: !!CLOUDFLARE_CONFIG.apiToken });
-});
-
-app.post('/api/edge/config', async (req, res) => {
-    try {
-        CLOUDFLARE_CONFIG = req.body;
-        const dir = join(process.cwd(), 'ops');
-        if (!existsSync(dir)) await mkdir(dir, { recursive: true });
-        await writeFile(join(dir, 'cloudflare.json'), JSON.stringify(CLOUDFLARE_CONFIG, null, 2));
-        res.json({ success: true });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.post('/api/edge/chat', async (req, res) => {
-    const { prompt, systemInstruction } = req.body;
-    try {
-        console.log("🚀 Edge Offload: Sent request to Cloudflare GPUs.");
-        const response = await callCloudflareAI(prompt, systemInstruction);
-        res.json({ response });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.post('/api/edge/test', async (req, res) => {
-    try {
-        const response = await callCloudflareAI("Hello World. Are you active?", "System check.");
-        res.json({ success: true, response });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.post('/api/edge/sync', async (req, res) => {
-    const { snapshot } = req.body;
-    // Simulate sync to a Durable Object via bridge
-    try {
-        console.log("☁️ Cloudflare Edge: Syncing Durable Object memory snapshot...");
-        // In a real scenario, this would POST to a deployed CF Worker endpoint
-        // that handles the actual Durable Object storage.
-        res.json({ success: true, timestamp: new Date().toISOString() });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.post('/api/chat', async (req, res) => {
-    const { message, model, systemInstruction } = req.body;
-    try {
-        const response = await callAI(model, message, systemInstruction);
-        res.json({ response });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.post('/api/qa/visual', async (req, res) => {
-    const { url } = req.body;
-    try {
-        if (!existsSync(join(process.cwd(), 'screenshots'))) await mkdir(join(process.cwd(), 'screenshots'));
-        const browser = await puppeteer.launch({ headless: 'new' });
-        const page = await browser.newPage();
-        await page.setViewport({ width: 1920, height: 1080 });
-        await page.goto(url, { waitUntil: 'networkidle0' });
-        const desktopPath = `screenshots/desktop-${Date.now()}.png`;
-        await page.screenshot({ path: desktopPath });
-        await page.setViewport({ width: 375, height: 812, isMobile: true });
-        const mobilePath = `screenshots/mobile-${Date.now()}.png`;
-        await page.screenshot({ path: mobilePath });
-        await browser.close();
-        res.json({
-            results: {
-                desktop: `http://${HOST}:${PORT}/${desktopPath}`,
-                mobile: `http://${HOST}:${PORT}/${mobilePath}`
-            }
-        });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.post('/api/start/:id', (req, res) => res.json({ status: 'started' }));
-app.post('/api/stop/:id', (req, res) => res.json({ status: 'stopped' }));
-app.post('/api/devtools/start', (req, res) => res.json({ status: 'active' }));
-
-httpServer.listen(PORT, HOST, () => {
-  console.log(`🚀 Mission Control Server running at http://${HOST}:${PORT}`);
-  console.log(`🔒 Network: Same-Origin Proxy active. Local Network Access secured.`);
-  console.log(`☁️ Cloudflare Edge: Workers AI & Durable Objects ready.`);
-});
-
-io.on('connection', (socket) => {
-  socket.emit('log', { agentId: 'system', type: 'system', message: 'Mission Control Online.', timestamp: new Date().toISOString() });
-});
-
-// --- Autopilot control (restored) ---
-let autoPilotConfig = {
-  enabled: false,
-  mode: 'SAFE', // SAFE | YOLO
+const getTargetUrl = () => {
+    if (process.env.FRONTEND_URL) return process.env.FRONTEND_URL;
+    return IS_DOCKER ? `http://localhost:${PORT}` : `http://localhost:${FRONTEND_PORT}`;
 };
 
-app.get('/api/autopilot', (req, res) => {
-  res.json(autoPilotConfig);
+const getPuppeteerFlags = () => ({
+    headless: "new",
+    args: IS_DOCKER ? ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] : [],
+    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined
 });
 
-app.post('/api/autopilot', (req, res) => {
-  const { enabled, mode } = req.body || {};
+let MODEL_REGISTRY = {};
 
-  if (typeof enabled === 'boolean') {
-    autoPilotConfig.enabled = enabled;
-  }
+async function loadModelRegistry() {
+    try {
+        if (!existsSync(MODELS_JSON)) return;
+        const data = await readFile(MODELS_JSON, 'utf8');
+        const models = JSON.parse(data);
+        MODEL_REGISTRY = models.reduce((acc, m) => {
+            const apiKey = m.manualApiKey || process.env[m.apiKeyEnv] || process.env.API_KEY;
+            if (apiKey) acc[m.id] = { ...m, apiKey, ready: true };
+            else acc[m.id] = { ...m, ready: false };
+            return acc;
+        }, {});
+    } catch (error) {
+        console.error('❌ Failed to load model registry:', error);
+    }
+}
 
-  if (mode === 'SAFE' || mode === 'YOLO') {
-    autoPilotConfig.mode = mode;
-  }
+await loadModelRegistry();
 
-  res.json({ ok: true, autoPilotConfig });
-});
-
-
-// --- Queue status (restored) ---
-let commandQueue = [];
-let activeTasks = [];
-
-app.get('/api/queue/status', (req, res) => {
-  res.json({
-    queued: commandQueue.length,
-    active: activeTasks.length,
-    queue: commandQueue,
-    activeTasks,
-  });
-});
-
-
-// --- Facts ingestion (restored) ---
-app.post('/api/facts', async (req, res) => {
-  try {
-    const factsPath = join(process.cwd(), 'ops', 'facts.json');
-    const incomingFacts = req.body || {};
-
-    let existingFacts = {};
-    if (existsSync(factsPath)) {
-      const data = await readFile(factsPath, 'utf8');
-      existingFacts = JSON.parse(data);
+async function callAI(modelKey, prompt, systemInstruction = "", latLng = null, thinkingBudget = 0, agentId = 'commander', image = null) {
+    const config = MODEL_REGISTRY[modelKey];
+    const provider = config?.provider || 'google';
+    const apiKey = config?.apiKey || process.env.API_KEY;
+    
+    // Handle different providers
+    if (provider === 'openai' || provider === 'openai-compatible') {
+        // OpenAI and OpenAI-compatible (DeepSeek, etc.)
+        const baseUrl = config?.baseUrl || 'https://api.openai.com/v1';
+        const modelId = config?.apiModelId || 'gpt-4o';
+        
+        const messages = [];
+        if (systemInstruction) {
+            messages.push({ role: 'system', content: systemInstruction });
+        }
+        
+        if (image) {
+            messages.push({
+                role: 'user',
+                content: [
+                    { type: 'text', text: prompt },
+                    { type: 'image_url', image_url: { url: image } }
+                ]
+            });
+        } else {
+            messages.push({ role: 'user', content: prompt });
+        }
+        
+        try {
+            const response = await fetch(`${baseUrl}/chat/completions`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${apiKey}`
+                },
+                body: JSON.stringify({
+                    model: modelId,
+                    messages,
+                    max_tokens: 4096
+                })
+            });
+            
+            const data = await response.json();
+            if (data.error) {
+                throw new Error(data.error.message || 'OpenAI API error');
+            }
+            return { text: data.choices?.[0]?.message?.content || '', groundingChunks: [] };
+        } catch (error) {
+            console.error(`[${provider}] API Error:`, error.message);
+            throw error;
+        }
+    }
+    
+    // Default: Google Gemini
+    const ai = new GoogleGenAI({ apiKey });
+    const modelToUse = config?.apiModelId || (thinkingBudget > 0 ? 'gemini-3-pro-preview' : 'gemini-3-flash-preview');
+    
+    const genConfig = { systemInstruction };
+    if (thinkingBudget > 0 && (modelToUse.includes('gemini-3') || modelToUse.includes('gemini-2.5'))) {
+        genConfig.thinkingConfig = { thinkingBudget };
     }
 
-    const mergedFacts = { ...existingFacts, ...incomingFacts };
-    await writeFile(factsPath, JSON.stringify(mergedFacts, null, 2));
+    let contents = prompt;
+    if (image) {
+        contents = { parts: [{ text: prompt }, { inlineData: { data: image.split(',')[1], mimeType: 'image/png' } }] };
+    }
 
-    res.json({ ok: true, facts: mergedFacts });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
-  }
+    const res = await ai.models.generateContent({ model: modelToUse, contents, config: genConfig });
+    return { text: res.text, groundingChunks: res.candidates?.[0]?.groundingMetadata?.groundingChunks || [] };
+}
+
+const autopilotCtrl = new AutopilotController(callAI);
+const gitService = new GitService(PROJECT_ROOT);
+const autopilot = new AutopilotService(io);
+const agentManager = new AgentManager(io, MODEL_REGISTRY, gitService, callAI);
+const missionQueue = new MissionQueue(io, agentManager, autopilot);
+
+// Initialize integrations
+const integrations = new Integrations();
+integrations.initialize().then(status => {
+    console.log('📊 Integrations Status:', status);
+}).catch(err => {
+    console.error('❌ Integrations init error:', err.message);
 });
 
+// MCP Router for Claude Desktop
+const mcpRouter = createMCPRouter({
+    integrations,
+    agentManager,
+    callAI
+});
+app.use('/mcp', mcpRouter);
 
-// --- Deploy trigger (restored) ---
-app.post('/api/deploy', async (req, res) => {
-  try {
-    // Placeholder deploy hook (intentionally minimal)
-    res.json({ ok: true, status: 'deploy triggered' });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
-  }
+// OAuth callback route for GSC/GA4
+app.get('/api/oauth/callback', async (req, res) => {
+    const { code, state } = req.query;
+    try {
+        const service = state || 'gsc'; // default to GSC
+        const result = await integrations.handleOAuthCallback(service, code);
+        res.send(`<html><body><h1>✅ ${service.toUpperCase()} Authorization Complete</h1><p>You can close this window.</p></body></html>`);
+    } catch (error) {
+        res.status(500).send(`<html><body><h1>❌ Authorization Failed</h1><p>${error.message}</p></body></html>`);
+    }
 });
 
+// Integration status endpoint
+app.get('/api/integrations/status', (req, res) => {
+    res.json(integrations.getStatus());
+});
 
-// --- Git automation (restored: safe/read-only) ---
-app.get('/api/git/status', async (req, res) => {
-  try {
-    exec('git status --short', { cwd: process.cwd() }, (err, stdout, stderr) => {
-      if (err) return res.status(500).json({ ok: false, error: stderr || err.message });
-      res.json({ ok: true, status: stdout });
+// OAuth URLs endpoint
+app.get('/api/integrations/oauth-urls', (req, res) => {
+    res.json(integrations.getOAuthUrls());
+});
+
+// Socket.io Global Handlers
+io.on('connection', (socket) => {
+    socket.on('swarm-mission', (task) => {
+        missionQueue.addTask(task);
     });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
 
-app.get('/api/git/log', async (req, res) => {
-  try {
-    exec('git log --oneline -n 20', { cwd: process.cwd() }, (err, stdout, stderr) => {
-      if (err) return res.status(500).json({ ok: false, error: stderr || err.message });
-      res.json({ ok: true, log: stdout });
+    socket.on('agent-sprout', (data) => {
+        agentManager.spawnSubAgent(data.parentId, data.taskName, data.branchName);
     });
+});
+
+// Sensory Daemon
+const startSensoryDaemon = () => {
+    setInterval(async () => {
+        const state = autopilot.getState();
+        if (state.enabled) {
+            try {
+                const browser = await puppeteer.launch(getPuppeteerFlags());
+                const page = await browser.newPage();
+                const logs = [];
+                page.on('console', msg => { if (msg.type() === 'error') logs.push(msg.text()); });
+                await page.goto(getTargetUrl(), { waitUntil: 'networkidle0' });
+                if (logs.length > 0) {
+                    const screenshotId = `failure-${Date.now()}.png`;
+                    await page.screenshot({ path: join(SCREENSHOTS_DIR, screenshotId) });
+                    const proposal = await autopilotCtrl.evaluateLog('BROWSER_UI', logs.join('\n'), state.model);
+                    if (proposal.failure) {
+                        io.emit('agent-deviation', { agentId: 'BROWSER_UI', ...proposal, screenshot: `/screenshots/${screenshotId}`, timestamp: Date.now() });
+                    }
+                }
+                await browser.close();
+            } catch (e) {}
+        }
+    }, 60000);
+};
+
+const restoredRouter = createRestoredRouter({ 
+    gitService, autopilot, agentManager, missionQueue,
+    aiCore: { callAI, getModelRegistry: () => Object.values(MODEL_REGISTRY), reloadModelRegistry: loadModelRegistry }
+});
+
+// --- Sensory Snapshot ---
+app.post('/api/sensory/snapshot', async (req, res) => {
+    try {
+        const browser = await puppeteer.launch(getPuppeteerFlags());
+        const page = await browser.newPage();
+        await page.goto(getTargetUrl(), { waitUntil: 'networkidle2' });
+        const buffer = await page.screenshot({ encoding: 'base64' });
+        await browser.close();
+        res.json({ image: `data:image/png;base64,${buffer}` });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// --- Cloudflare Edge Sync ---
+app.post('/api/edge/sync', async (req, res) => {
+    const { key, data } = req.body;
+    try {
+        const response = await fetch('https://swarm-edge.flood-doctor.workers.dev/api/kv', {
+            method: 'POST',
+            headers: { 
+                'Content-Type': 'application/json', 
+                'Authorization': `Bearer ${process.env.CF_TOKEN}` 
+            },
+            body: JSON.stringify({ key, data, timestamp: Date.now() })
+        });
+        const result = await response.json();
+        res.json(result);
+    } catch (e) { 
+        res.status(500).json({ error: "Edge Unreachable", fallback: true }); 
+    }
+});
+
+app.get('/api/edge/status', async (req, res) => {
+    try {
+        const startTime = Date.now();
+        const response = await fetch('https://swarm-edge.flood-doctor.workers.dev/api/health', {
+            method: 'GET',
+            headers: { 'Authorization': `Bearer ${process.env.CF_TOKEN}` },
+            signal: AbortSignal.timeout(5000)
+        });
+        const latency = Date.now() - startTime;
+        
+        if (response.ok) {
+            const data = await response.json();
+            res.json({
+                node: data.node || 'Edge-Primary',
+                latency: `${latency}ms`,
+                status: 'Connected',
+                globalReplicas: data.replicas || ['LHR', 'NRT', 'FRA', 'CDG'],
+                lastSync: new Date().toISOString()
+            });
+        } else {
+            throw new Error('Edge health check failed');
+        }
+    } catch (e) {
+        res.json({
+            node: 'Offline',
+            latency: 'N/A',
+            status: 'Disconnected',
+            globalReplicas: [],
+            error: e.message
+        });
+    }
+});
+
+app.use('/api', restoredRouter);
+app.use('/api/claude', claudeBridgeRouter);
+app.use('/api/sentinel', sentinelRouter);
+
+
+// Initialize State Store
+await stateStore.init();
+
+// Initialize Claude Code Bridge with dependencies
+claudeCodeBridge.init({ io, stateStore });
+
+// Initialize Director Engine with dependencies
+directorEngine.init({ callAI, integrations: Integrations, io });
+
+// Initialize Sentinel Agent with dependencies
+sentinelAgent.init({ io, mcpClient: null, callAI });
+
+// Initialize Project Service with dependencies
+projectService.init({ stateStore, agentManager, io, directorEngine });
+
+// Emit projects on new socket connections
+io.on('connection', (socket) => {
+    socket.emit('projects-update', projectService.getAllProjects());
+});
+
+const server = httpServer.listen(PORT, () => {
+    startSensoryDaemon();
+    console.log(`🚀 MISSION CONTROL ACTIVE ON PORT: ${PORT}`);
+});
+
+// ==========================================
+// 🤖 AGENT API ROUTES
+// ==========================================
+
+
+// Spawn a new Claude Code agent
+app.post('/api/agents/spawn', async (req, res) => {
+    try {
+        const { task, workdir, autopilot = true } = req.body;
+        const branchName = 'agent-' + Date.now();
+        const result = await agentManager.spawnClaudeAgent({
+            taskName: task || 'unnamed-task',
+            branchName: branchName,
+            prompt: task,
+            autoPilot: autopilot
+        });
+        res.json(result);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// List all agents
+app.get('/api/agents', (req, res) => {
+    try {
+        const agents = agentManager.listAgents();
+        res.json({ agents });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Get agent status
+app.get('/api/agents/:id/status', (req, res) => {
+    try {
+        const status = agentManager.getStatus(req.params.id);
+        res.json(status);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Send input to agent
+app.post('/api/agents/:id/input', async (req, res) => {
+    try {
+        const { input } = req.body;
+        await agentManager.sendInput(req.params.id, input);
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Get agent logs
+app.get('/api/agents/:id/logs', (req, res) => {
+    try {
+        const lines = parseInt(req.query.lines) || 100;
+        const logs = agentManager.getLogs(req.params.id, lines);
+        res.json({ logs });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Stop an agent
+app.delete('/api/agents/:id', async (req, res) => {
+    try {
+        await agentManager.stopAgent(req.params.id);
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// ============================================
+// AI GENERATION ENDPOINT (Gemini Bridge)
+// ============================================
+app.post('/api/ai/generate', async (req, res) => {
+  try {
+    const { prompt, model = 'gemini-pro' } = req.body;
+    if (!prompt) {
+      return res.status(400).json({ error: 'prompt is required' });
+    }
+    
+    const apiKey = process.env.GOOGLE_API_KEY;
+    if (!apiKey) {
+      return res.status(503).json({ error: 'GOOGLE_API_KEY not configured' });
+    }
+    
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }]
+        })
+      }
+    );
+    
+    const data = await response.json();
+    if (data.error) {
+      return res.status(500).json({ error: data.error.message });
+    }
+    
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    res.json({ response: text, model });
   } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 
-
-// --- Lighthouse audit (restored: stub) ---
-app.get('/api/audit/lighthouse', async (req, res) => {
+// ============================================
+// V7 BUILDER ENDPOINT - Direct Claude Code Spawning
+// ============================================
+app.post('/api/v7/build', async (req, res) => {
   try {
+    const { phase = 'auto', resume = true } = req.body;
+    const handoffPath = join(__dirname, 'handoffs', 'latest.json');
+    
+    // Read current handoff state
+    let handoff = { phase: '1', status: 'NOT_STARTED', completed: [], pending: [] };
+    try {
+      handoff = JSON.parse(await readFile(handoffPath, 'utf8'));
+    } catch (e) { /* No handoff yet */ }
+    
+    // Determine which phase to run
+    const targetPhase = phase === 'auto' ? handoff.phase : phase;
+    
+    // Build the prompt with full context
+    const builderPrompt = `You are the Mission Control V7 Builder Agent.
+
+RESUME FROM: Phase ${targetPhase}
+HANDOFF STATE: ${JSON.stringify(handoff, null, 2)}
+
+PROJECT ROOT: /Users/ghost/flood-doctor/Mission-Control-APP/ops
+
+CRITICAL RULES:
+1. Read the spec files FIRST: /Users/ghost/flood-doctor/Mission-Control-APP/ops/docs/
+2. All state mutations go through StateStore
+3. Write handoff to /Users/ghost/flood-doctor/Mission-Control-APP/ops/handoffs/latest.json after EVERY file created
+4. Create atomic, reversible changes only
+5. DO NOT modify server.js, .env, or OAuth configs
+6. If you need human input, STOP and update handoff with blockedReason
+
+PHASE ${targetPhase} OBJECTIVES:
+${getPhaseObjectives(targetPhase)}
+
+SESSION PROTOCOL:
+- After every 3 files created, update handoffs/latest.json
+- If context feels heavy, create checkpoint and report "HANDOFF READY"
+- On any error, log to handoffs/latest.json and stop
+
+START NOW. Read existing code first, then continue building.`;
+
+    const branchName = `v7-build-phase${targetPhase}-${Date.now()}`;
+    
+    const result = await agentManager.spawnClaudeAgent({
+      taskName: `V7 Build Phase ${targetPhase}`,
+      branchName: branchName,
+      prompt: builderPrompt,
+      autoPilot: true
+    });
+    
+    // Update handoff with spawn info
+    handoff.lastSpawn = {
+      agentId: result.agentId,
+      branch: branchName,
+      phase: targetPhase,
+      timestamp: new Date().toISOString()
+    };
+    handoff.status = 'RUNNING';
+    
+    await writeFile(handoffPath, JSON.stringify(handoff, null, 2));
+    
     res.json({
-      ok: true,
-      audit: {
-        performance: null,
-        accessibility: null,
-        seo: null,
-        bestPractices: null,
-        note: 'Lighthouse stub restored; execution to be implemented',
-      },
+      success: true,
+      message: `V7 Builder spawned for Phase ${targetPhase}`,
+      agentId: result.agentId,
+      branch: branchName,
+      handoff: handoff
     });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
-
-// --- Telemetry ingestion (restored) ---
-app.post('/api/telemetry', async (req, res) => {
+// Get V7 build status
+app.get('/api/v7/status', async (req, res) => {
   try {
-    const payload = req.body || {};
-    // Intentionally minimal: accept and acknowledge telemetry
-    res.json({ ok: true, received: true });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    const handoffPath = join(__dirname, 'handoffs', 'latest.json');
+    const handoff = JSON.parse(await readFile(handoffPath, 'utf8'));
+    
+    // Get agent status if running
+    let agentStatus = null;
+    if (handoff.lastSpawn?.agentId) {
+      agentStatus = agentManager.getStatus(handoff.lastSpawn.agentId);
+    }
+    
+    res.json({
+      handoff,
+      agentStatus,
+      phases: {
+        1: 'State Authority (StateStore, JsonStore, schemas, validators)',
+        2: 'Mission Contracts (artifact gates, tool permissions)',
+        3: 'Circuit Breaker (rate limits, cost estimator)',
+        4: 'Agent Execution (spawn_agent, spawn_agent_immediate)',
+        5: 'Task Graph (dependencies, task types)',
+        6: 'Self-Healing (proposals, idempotency)',
+        7: 'Watchdog (autonomous triggers)',
+        8: 'MCP Tools (all tool scaffolding)',
+        9: 'Integration Health (provider checks)'
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
+// Helper: Get phase objectives
+function getPhaseObjectives(phase) {
+  const objectives = {
+    '1': `- Create ops/state/StateStore.js (if not exists)
+- Create ops/state/storage/JsonStore.js
+- Create ops/state/validators/missionValidator.js
+- Create ops/state/validators/artifactValidator.js
+- Ensure snapshots/ and audit/ directories exist`,
+    '2': `- Add mission contract enforcement to StateStore
+- Implement artifact gates (no completion without proof)
+- Add tool permission matrix by missionClass
+- Add destructive action gating`,
+    '3': `- Create ops/services/rateLimitService.js
+- Create ops/services/costEstimatorService.js
+- Add circuit breaker logic to StateStore
+- Implement budget limits and failure tracking`,
+    '4': `- Update spawn_agent to return recipe only
+- Implement spawn_agent_immediate with armed mode gate
+- Add cooldown and rate limit enforcement
+- Connect to StateStore for state tracking`,
+    '5': `- Create ops/services/taskGraphService.js
+- Implement dependency resolution
+- Add task types (work, verification, finalization)
+- Enforce task gates`,
+    '6': `- Create ops/services/selfHealingService.js
+- Implement failure analysis
+- Add self_heal_proposal artifact generation
+- Implement idempotency keys`,
+    '7': `- Create ops/services/watchdogService.js
+- Implement signal detection
+- Add mission creation from signals
+- Create rankingWatchdogService.js`,
+    '8': `- Create all MCP tools in ops/mcp/tools/
+- mission.tools.js, task.tools.js, agent.tools.js
+- artifact.tools.js, safety.tools.js, server.tools.js
+- ranking.tools.js, gsc.tools.js, ga4.tools.js`,
+    '9': `- Add healthCheck() to all integration services
+- Create provider.health endpoint
+- Add connection test buttons to UI
+- Implement quota tracking`
+  };
+  return objectives[phase] || objectives['1'];
+}
+
+// ==========================================
+// 📁 PROJECT API ROUTES (V8)
+// ==========================================
+
+// Get all projects
+app.get('/api/projects', (req, res) => {
+  try {
+    const projects = projectService.getAllProjects();
+    res.json({ projects });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get project statistics
+app.get('/api/projects/stats', (req, res) => {
+  try {
+    const stats = projectService.getStats();
+    res.json(stats);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get available director models
+app.get('/api/projects/director-models', (req, res) => {
+  try {
+    const models = Object.values(MODEL_REGISTRY)
+      .filter(m => m.ready)
+      .map(m => ({
+        id: m.id,
+        name: m.name,
+        provider: m.provider,
+        description: m.description || `${m.provider} ${m.name}`,
+        capabilities: m.capabilities || [],
+        available: m.ready
+      }));
+    res.json({ models });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create a new project
+app.post('/api/projects', async (req, res) => {
+  try {
+    const { name, description, instructions, directorModel } = req.body;
+
+    if (!name || !instructions || !directorModel) {
+      return res.status(400).json({
+        error: 'Missing required fields: name, instructions, directorModel'
+      });
+    }
+
+    const result = await projectService.createProject({
+      name,
+      description,
+      instructions,
+      directorModel
+    });
+
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get single project
+app.get('/api/projects/:id', (req, res) => {
+  try {
+    const project = projectService.getProject(req.params.id);
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+    res.json({ project });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update project status
+app.patch('/api/projects/:id/status', async (req, res) => {
+  try {
+    const { status } = req.body;
+    const result = await projectService.updateProjectStatus(req.params.id, status);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update project phase
+app.patch('/api/projects/:id/phase', async (req, res) => {
+  try {
+    const { phase } = req.body;
+    const result = await projectService.updateProjectPhase(req.params.id, phase);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Spawn director agent for project
+app.post('/api/projects/:id/spawn-director', async (req, res) => {
+  try {
+    const result = await projectService.spawnDirectorAgent(req.params.id);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get Director status for a project
+app.get('/api/projects/:id/director', (req, res) => {
+  try {
+    const status = directorEngine.getDirectorStatus(req.params.id);
+    if (!status) {
+      return res.json({ active: false, message: 'No active director for this project' });
+    }
+    res.json({ active: true, ...status });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Send message to Director
+app.post('/api/projects/:id/director/message', async (req, res) => {
+  try {
+    const { message } = req.body;
+    if (!message) {
+      return res.status(400).json({ error: 'Message is required' });
+    }
+    const result = await directorEngine.sendMessage(req.params.id, message);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get all active Directors
+app.get('/api/directors', (req, res) => {
+  try {
+    const directors = directorEngine.getActiveDirectors();
+    res.json({ directors });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete project
+app.delete('/api/projects/:id', async (req, res) => {
+  try {
+    const result = await projectService.deleteProject(req.params.id);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});

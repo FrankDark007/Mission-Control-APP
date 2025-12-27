@@ -1,0 +1,498 @@
+/**
+ * Mission Control MCP Server
+ * Exposes tools to Claude Desktop via Model Context Protocol
+ * Transport: SSE (Server-Sent Events) over HTTP
+ */
+
+import { Router } from 'express';
+import { EventEmitter } from 'events';
+import { sessionManager } from './tools/sessionManager.js';
+
+export class MCPServer extends EventEmitter {
+    constructor(dependencies) {
+        super();
+        this.deps = dependencies;
+        this.tools = new Map();
+        this.sessions = new Map();
+        this.router = Router();
+        
+        this._registerCoreTools();
+        this._setupRoutes();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // TOOL REGISTRATION
+    // ─────────────────────────────────────────────────────────────────────────
+
+    registerTool(name, schema, handler) {
+        this.tools.set(name, { name, schema, handler });
+    }
+
+    _registerCoreTools() {
+        const { integrations, agentManager, callAI } = this.deps;
+
+        // ── AI Provider Tools ──────────────────────────────────────────────────
+
+        this.registerTool('call_gemini', {
+            description: 'Call Gemini Pro 3 with a prompt. Returns AI-generated response.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    prompt: { type: 'string', description: 'The prompt to send to Gemini' },
+                    systemInstruction: { type: 'string', description: 'Optional system instruction' },
+                    thinkingBudget: { type: 'number', description: 'Thinking tokens budget (0 = disabled)' }
+                },
+                required: ['prompt']
+            }
+        }, async (params) => {
+            const result = await callAI('gemini-3-pro', params.prompt, params.systemInstruction || '', null, params.thinkingBudget || 0);
+            return { content: [{ type: 'text', text: result.text }] };
+        });
+
+        this.registerTool('call_perplexity', {
+            description: 'Real-time web search via Perplexity API. Returns current information with citations.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    query: { type: 'string', description: 'Search query' },
+                    focus: { type: 'string', enum: ['web', 'academic', 'news', 'reddit'], description: 'Search focus area' }
+                },
+                required: ['query']
+            }
+        }, async (params) => {
+            const result = await integrations.perplexity.search(params.query, params.focus || 'web');
+            return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+        });
+
+        // ── SEO & Analytics Tools ──────────────────────────────────────────────
+
+        this.registerTool('check_serp', {
+            description: 'Check live Google rankings for a keyword + location combination.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    keyword: { type: 'string', description: 'Target keyword to check' },
+                    location: { type: 'string', description: 'Geographic location (city, state)' },
+                    domain: { type: 'string', description: 'Your domain to find in results' }
+                },
+                required: ['keyword', 'location']
+            }
+        }, async (params) => {
+            const result = await integrations.serp.check(params.keyword, params.location, params.domain);
+            return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+        });
+
+        this.registerTool('get_gsc_data', {
+            description: 'Get Google Search Console data: impressions, clicks, CTR, position for queries.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    siteUrl: { type: 'string', description: 'Site URL in GSC format' },
+                    startDate: { type: 'string', description: 'Start date (YYYY-MM-DD)' },
+                    endDate: { type: 'string', description: 'End date (YYYY-MM-DD)' },
+                    dimensions: { type: 'array', items: { type: 'string' }, description: 'Dimensions: query, page, country, device' }
+                },
+                required: ['siteUrl']
+            }
+        }, async (params) => {
+            const result = await integrations.gsc.query(params);
+            return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+        });
+
+        this.registerTool('get_analytics', {
+            description: 'Get Google Analytics 4 data: sessions, users, pageviews, events.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    propertyId: { type: 'string', description: 'GA4 property ID' },
+                    startDate: { type: 'string', description: 'Start date (YYYY-MM-DD or relative: 7daysAgo)' },
+                    endDate: { type: 'string', description: 'End date (YYYY-MM-DD or today)' },
+                    metrics: { type: 'array', items: { type: 'string' }, description: 'Metrics to retrieve' },
+                    dimensions: { type: 'array', items: { type: 'string' }, description: 'Dimensions to group by' }
+                },
+                required: ['propertyId']
+            }
+        }, async (params) => {
+            const result = await integrations.ga4.query(params);
+            return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+        });
+
+        this.registerTool('get_ahrefs_data', {
+            description: 'Get Ahrefs data: backlinks, referring domains, organic keywords, competitor analysis.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    target: { type: 'string', description: 'Domain or URL to analyze' },
+                    mode: { type: 'string', enum: ['overview', 'backlinks', 'keywords', 'competitors'], description: 'Analysis mode' },
+                    limit: { type: 'number', description: 'Max results to return' }
+                },
+                required: ['target']
+            }
+        }, async (params) => {
+            const result = await integrations.ahrefs.query(params);
+            return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+        });
+
+        // ── Content Generation Tools ───────────────────────────────────────────
+
+        this.registerTool('generate_location_page', {
+            description: 'Generate SEO-optimized location/service page content for Flood Doctor.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    city: { type: 'string', description: 'Target city name' },
+                    state: { type: 'string', description: 'State abbreviation' },
+                    service: { type: 'string', description: 'Primary service (water damage, mold, fire)' },
+                    competitors: { type: 'array', items: { type: 'string' }, description: 'Local competitor names to outrank' },
+                    keywords: { type: 'array', items: { type: 'string' }, description: 'Target keywords to include' }
+                },
+                required: ['city', 'state', 'service']
+            }
+        }, async (params) => {
+            const prompt = this._buildLocationPagePrompt(params);
+            const result = await callAI('gemini-3-pro', prompt, this._getLocationPageSystemPrompt(), null, 8000);
+            return { content: [{ type: 'text', text: result.text }] };
+        });
+
+        this.registerTool('generate_blog_post', {
+            description: 'Generate SEO-optimized blog post for Flood Doctor.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    topic: { type: 'string', description: 'Blog post topic' },
+                    targetKeyword: { type: 'string', description: 'Primary keyword to target' },
+                    wordCount: { type: 'number', description: 'Target word count' },
+                    includeSchema: { type: 'boolean', description: 'Include FAQ schema markup' }
+                },
+                required: ['topic', 'targetKeyword']
+            }
+        }, async (params) => {
+            const prompt = this._buildBlogPostPrompt(params);
+            const result = await callAI('gemini-3-pro', prompt, this._getBlogPostSystemPrompt(), null, 8000);
+            return { content: [{ type: 'text', text: result.text }] };
+        });
+
+        this.registerTool('generate_svg', {
+            description: 'Generate SVG graphic or animation via Refract AI.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    description: { type: 'string', description: 'Visual description of desired SVG' },
+                    style: { type: 'string', enum: ['icon', 'illustration', 'animation', 'infographic'], description: 'SVG style' },
+                    colors: { type: 'array', items: { type: 'string' }, description: 'Brand colors to use (hex)' },
+                    animated: { type: 'boolean', description: 'Include CSS/SMIL animation' }
+                },
+                required: ['description']
+            }
+        }, async (params) => {
+            const result = await integrations.refract.generate(params);
+            return { content: [{ type: 'text', text: result.svg }] };
+        });
+
+        // ── Agent Management Tools ─────────────────────────────────────────────
+
+        this.registerTool('spawn_agent', {
+            description: 'Spawn a Claude Code agent in a git worktree for parallel task execution.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    taskName: { type: 'string', description: 'Name/description of the task' },
+                    branchName: { type: 'string', description: 'Git branch to create for this task' },
+                    prompt: { type: 'string', description: 'Initial prompt to send to the agent' },
+                    autoPilot: { type: 'boolean', description: 'Enable auto-pilot for permission prompts' }
+                },
+                required: ['taskName', 'branchName', 'prompt']
+            }
+        }, async (params) => {
+            const result = await agentManager.spawnClaudeAgent(params);
+            return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+        });
+
+        this.registerTool('get_agent_status', {
+            description: 'Get status of all running agents or a specific agent.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    agentId: { type: 'string', description: 'Specific agent ID (optional)' }
+                }
+            }
+        }, async (params) => {
+            const status = agentManager.getStatus(params.agentId);
+            return { content: [{ type: 'text', text: JSON.stringify(status, null, 2) }] };
+        });
+
+        this.registerTool('send_to_agent', {
+            description: 'Send input/command to a running agent via stdin.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    agentId: { type: 'string', description: 'Agent ID to send input to' },
+                    input: { type: 'string', description: 'Text to send to agent stdin' }
+                },
+                required: ['agentId', 'input']
+            }
+        }, async (params) => {
+            const result = agentManager.sendInput(params.agentId, params.input);
+            return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+        });
+
+        this.registerTool('stop_agent', {
+            description: 'Stop a running agent and optionally clean up its worktree.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    agentId: { type: 'string', description: 'Agent ID to stop' },
+                    cleanup: { type: 'boolean', description: 'Remove worktree after stopping' }
+                },
+                required: ['agentId']
+            }
+        }, async (params) => {
+            const result = await agentManager.stopAgent(params.agentId, params.cleanup);
+            return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+        });
+
+        this.registerTool('get_agent_logs', {
+            description: 'Get recent logs from an agent.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    agentId: { type: 'string', description: 'Agent ID' },
+                    lines: { type: 'number', description: 'Number of recent lines to retrieve' }
+                },
+                required: ['agentId']
+            }
+        }, async (params) => {
+            const logs = agentManager.getLogs(params.agentId, params.lines || 100);
+            return { content: [{ type: 'text', text: logs.join('\n') }] };
+        });
+    }
+
+
+
+        // ── Session Management Tools ───────────────────────────────────────────
+
+        this.registerTool('session_checkpoint', {
+            description: 'Record a checkpoint for the current task. Call when starting major work.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    task: { type: 'string', description: 'Description of current task' }
+                },
+                required: ['task']
+            }
+        }, async (params) => {
+            sessionManager.setActiveTask(params.task);
+            return { content: [{ type: 'text', text: '✓ Checkpoint: ' + params.task }] };
+        });
+
+        this.registerTool('session_health', {
+            description: 'Check session health. Call every 10-15 tool calls.',
+            inputSchema: { type: 'object', properties: {} }
+        }, async () => {
+            const status = sessionManager.getHealthStatus();
+            let msg = 'Session Health: ' + status.warningLevel + '\n';
+            msg += 'Tool calls: ' + status.toolCallCount + '\n';
+            msg += 'Duration: ' + status.sessionMinutes + ' min\n';
+            if (status.activeTask) msg += 'Task: ' + status.activeTask + '\n';
+            if (status.warningLevel === 'CRITICAL' || status.warningLevel === 'HIGH') {
+                msg += '\n⚠️ RECOMMEND: Generate handoff and start new session';
+            }
+            return { content: [{ type: 'text', text: msg }] };
+        });
+
+        this.registerTool('session_handoff', {
+            description: 'Generate handoff packet for session transition. Use when health is HIGH/CRITICAL.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    reason: { type: 'string', description: 'Why handoff needed' },
+                    nextSteps: { type: 'string', description: 'What to do next' }
+                }
+            }
+        }, async (params) => {
+            const { filepath, handoff } = await sessionManager.generateHandoff(
+                params.reason || 'context_limit',
+                params.nextSteps || ''
+            );
+            let msg = '## Handoff Generated\n\n';
+            msg += 'File: ' + filepath + '\n\n';
+            msg += '**Resume in new session with:** "Resume from handoff"\n\n';
+            msg += handoff.resumePrompt;
+            return { content: [{ type: 'text', text: msg }] };
+        });
+
+        this.registerTool('session_resume', {
+            description: 'Load latest handoff to resume previous session. Call at session start.',
+            inputSchema: { type: 'object', properties: {} }
+        }, async () => {
+            const handoff = await sessionManager.loadLatestHandoff();
+            if (!handoff) {
+                return { content: [{ type: 'text', text: 'No previous handoff found. Starting fresh.' }] };
+            }
+            sessionManager.reset();
+            return { content: [{ type: 'text', text: JSON.stringify(handoff, null, 2) }] };
+        });
+    
+    // ─────────────────────────────────────────────────────────────────────────
+    // PROMPT BUILDERS
+    // ─────────────────────────────────────────────────────────────────────────
+
+    _getLocationPageSystemPrompt() {
+        return `You are an SEO content specialist for Flood Doctor, a water damage restoration company serving Northern Virginia, DC, and Maryland. Generate location pages that:
+- Use H1, H2, H3 hierarchy properly
+- Include local landmarks, neighborhoods, and city-specific details
+- Mention IICRC S500 standards and certifications
+- Include FAQ schema-ready Q&A sections
+- Use natural keyword placement (no stuffing)
+- Include CTAs with phone number and form references
+- Write in professional, confident tone (never em-dashes)`;
+    }
+
+    _buildLocationPagePrompt(params) {
+        return `Generate a comprehensive location page for:
+City: ${params.city}, ${params.state}
+Service: ${params.service}
+${params.competitors ? `Competitors to outrank: ${params.competitors.join(', ')}` : ''}
+${params.keywords ? `Target keywords: ${params.keywords.join(', ')}` : ''}
+
+Include:
+1. H1 with city + service
+2. Introduction with local relevance
+3. Services section with details
+4. Why choose Flood Doctor section
+5. Service area coverage (neighborhoods)
+6. FAQ section (5-7 questions)
+7. CTA section
+
+Format as HTML with proper semantic markup.`;
+    }
+
+    _getBlogPostSystemPrompt() {
+        return `You are an SEO content specialist for Flood Doctor. Generate blog posts that:
+- Educate homeowners about water damage, mold, restoration
+- Include actionable tips and professional insights
+- Reference IICRC standards where appropriate
+- Use natural keyword placement
+- Include internal linking opportunities
+- Write in professional, helpful tone`;
+    }
+
+    _buildBlogPostPrompt(params) {
+        return `Generate a blog post about: ${params.topic}
+Target keyword: ${params.targetKeyword}
+Word count: ${params.wordCount || 1500}
+${params.includeSchema ? 'Include FAQ schema markup at the end.' : ''}
+
+Structure:
+1. Engaging title with keyword
+2. Introduction hook
+3. 3-5 main sections with H2 headers
+4. Actionable takeaways
+5. Conclusion with CTA
+${params.includeSchema ? '6. FAQ section with schema markup' : ''}`;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // SSE TRANSPORT & ROUTES
+    // ─────────────────────────────────────────────────────────────────────────
+
+    _setupRoutes() {
+        // SSE endpoint for MCP protocol
+        this.router.get('/sse', (req, res) => {
+            const sessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            
+            res.setHeader('Content-Type', 'text/event-stream');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Connection', 'keep-alive');
+            res.setHeader('X-Accel-Buffering', 'no');
+            
+            this.sessions.set(sessionId, res);
+            
+            // Send initial connection event
+            this._sendSSE(res, 'connected', { sessionId, version: '1.0.0' });
+            
+            req.on('close', () => {
+                this.sessions.delete(sessionId);
+            });
+        });
+
+        // JSON-RPC endpoint for tool calls
+        this.router.post('/message', async (req, res) => {
+            try {
+                const { jsonrpc, id, method, params } = req.body;
+                
+                if (jsonrpc !== '2.0') {
+                    return res.status(400).json({ error: 'Invalid JSON-RPC version' });
+                }
+
+                const result = await this._handleMethod(method, params);
+                res.json({ jsonrpc: '2.0', id, result });
+            } catch (error) {
+                res.json({
+                    jsonrpc: '2.0',
+                    id: req.body?.id,
+                    error: { code: -32603, message: error.message }
+                });
+            }
+        });
+
+        // Tool list endpoint (for discovery)
+        this.router.get('/tools', (req, res) => {
+            const tools = Array.from(this.tools.values()).map(t => ({
+                name: t.name,
+                description: t.schema.description,
+                inputSchema: t.schema.inputSchema
+            }));
+            res.json({ tools });
+        });
+    }
+
+    async _handleMethod(method, params) {
+        switch (method) {
+            case 'initialize':
+                return {
+                    protocolVersion: '2024-11-05',
+                    capabilities: {
+                        tools: { listChanged: true }
+                    },
+                    serverInfo: {
+                        name: 'mission-control',
+                        version: '6.0.0'
+                    }
+                };
+
+            case 'tools/list':
+                return {
+                    tools: Array.from(this.tools.values()).map(t => ({
+                        name: t.name,
+                        description: t.schema.description,
+                        inputSchema: t.schema.inputSchema
+                    }))
+                };
+
+            case 'tools/call':
+                const tool = this.tools.get(params.name);
+                if (!tool) {
+                    throw new Error(`Tool not found: ${params.name}`);
+                }
+                return await tool.handler(params.arguments || {});
+
+            default:
+                throw new Error(`Unknown method: ${method}`);
+        }
+    }
+
+    _sendSSE(res, event, data) {
+        res.write(`event: ${event}\n`);
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+    }
+
+    getRouter() {
+        return this.router;
+    }
+}
+
+export function createMCPRouter(dependencies) {
+    const server = new MCPServer(dependencies);
+    return server.getRouter();
+}

@@ -1,0 +1,29 @@
+
+version: '3.8'
+
+services:
+  mission-control:
+    build: .
+    container_name: flood-doctor-hq
+    ports:
+      - "3001:3001"
+    environment:
+      - API_KEY=${API_KEY}
+      - PORT=3001
+      - DOCKER_ENV=true
+      - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+    volumes:
+      - mission_data:/app/ops/missions.json
+      - fact_data:/app/facts.json
+      - protocol_data:/app/protocols.json
+      - baseline_data:/app/baselines
+      - screenshot_data:/app/screenshots
+      - ./ops/models.json:/app/ops/models.json
+    restart: unless-stopped
+
+volumes:
+  mission_data:
+  fact_data:
+  protocol_data:
+  baseline_data:
+  screenshot_data:

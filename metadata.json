@@ -1,5 +1,9 @@
 {
   "name": "Flood Doctor Mission Control",
-  "description": "Local operations dashboard for managing multi-agent AI swarms, git workflows, and QA logs.",
-  "requestFramePermissions": []
+  "description": "Local operations dashboard for managing multi-agent AI swarms, git workflows, and SEO diagnostics.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
 }

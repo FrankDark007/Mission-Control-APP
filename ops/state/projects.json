@@ -1,0 +1,19 @@
+{
+  "flood-doctor-website": {
+    "id": "flood-doctor-website",
+    "name": "Flood Doctor Website",
+    "description": "Modern React website for Flood Doctor water damage restoration company. Built with React, Vite, Tailwind CSS.",
+    "instructions": "Build a comprehensive website for Flood Doctor, a water damage restoration company. The site should include:\n\n- Homepage with hero section and service overview\n- Service pages (water damage, mold remediation, storm damage, etc.)\n- About page with company story and team\n- Contact page with form and location info\n- Blog section for SEO content\n- Mobile-responsive design\n- Core Web Vitals optimized\n- Local SEO optimized for service areas\n\nTech Stack: React, Vite, Tailwind CSS, Node.js backend\nDesign: Use Google Blue #1a73e8 for CTAs, rounded-lg max corners, text-sm body text",
+    "status": "active",
+    "phase": "execution",
+    "directorModel": "gemini-3-pro",
+    "directorAgentId": null,
+    "missionIds": [],
+    "bootstrapArtifactId": null,
+    "createdAt": "2025-12-20T00:00:00.000Z",
+    "updatedAt": "2025-12-27T00:30:00.000Z",
+    "lastActivityAt": "2025-12-27T00:30:00.000Z",
+    "completedAt": null,
+    "_stateVersion": 1
+  }
+}

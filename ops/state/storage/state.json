@@ -1,0 +1,48 @@
+{
+  "missions": {
+    "mission-test-1766786525357": {
+      "id": "mission-test-1766786525357",
+      "title": "Test Mission",
+      "missionClass": "exploration",
+      "contract": {
+        "requiredArtifacts": [
+          "verification_report"
+        ],
+        "riskLevel": "low",
+        "allowedTools": [
+          "tools/list",
+          "tools/call",
+          "mission.get_status",
+          "task.list",
+          "ranking.*",
+          "gsc.inspect_url",
+          "gsc.list_properties",
+          "ga4.list_accounts",
+          "ga4.list_properties",
+          "provider.health",
+          "integrations.status_overview"
+        ]
+      },
+      "status": "queued",
+      "taskIds": [],
+      "artifactIds": [],
+      "agentIds": [],
+      "failureCount": 0,
+      "immediateExecCount": 0,
+      "createdAt": "2025-12-26T22:02:05.357Z",
+      "updatedAt": "2025-12-26T22:02:05.357Z",
+      "_stateVersion": 1
+    }
+  },
+  "tasks": {},
+  "agents": {},
+  "artifacts": {},
+  "approvals": {},
+  "circuitBreaker": {
+    "tripped": false,
+    "reason": null,
+    "trippedAt": null
+  },
+  "_stateVersion": 1,
+  "_lastSnapshotAt": null
+}
