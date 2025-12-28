@@ -219,6 +219,14 @@ const App = () => {
             setInboxTasks([]);
         });
 
+        s.on('agent-spawned', (data: { taskId: string; agentId: string; pid: number }) => {
+            addToast(`Agent running (PID: ${data.pid})`, 'success');
+            // Update task status to in_progress
+            setInboxTasks(prev => prev.map(t =>
+                t.id === data.taskId ? { ...t, status: 'in_progress' as const } : t
+            ));
+        });
+
         // Fetch initial inbox tasks
         fetch('/api/claude/inbox')
             .then(res => res.json())
@@ -361,13 +369,26 @@ const App = () => {
                 {/* Task Inbox - floating panel */}
                 <TaskInbox
                     tasks={inboxTasks}
-                    onExecute={(task) => {
-                        // Navigate to builder with task instructions
-                        setSelectedTask(task);
-                        setActiveTab('builder');
-                        // Mark as acknowledged
-                        fetch(`/api/claude/tasks/${task.id}/acknowledge`, { method: 'POST' })
-                            .catch(err => console.error('Failed to acknowledge task:', err));
+                    onExecute={async (task) => {
+                        // Spawn Claude agent to execute the task
+                        addToast(`Spawning agent for: ${task.title}`, 'info');
+                        try {
+                            const res = await fetch(`/api/tasks/${task.id}/spawn`, { method: 'POST' });
+                            const data = await res.json();
+                            if (data.success) {
+                                addToast(`Agent spawned! PID: ${data.pid}`, 'success');
+                                // Remove from inbox on success
+                                setInboxTasks(prev => prev.filter(t => t.id !== task.id));
+                                return { success: true };
+                            } else {
+                                addToast(`Spawn failed: ${data.error}`, 'info');
+                                return { success: false, error: data.error };
+                            }
+                        } catch (err) {
+                            const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+                            addToast(`Spawn error: ${errorMsg}`, 'info');
+                            return { success: false, error: errorMsg };
+                        }
                     }}
                     onDismiss={(taskId) => {
                         setInboxTasks(prev => prev.filter(t => t.id !== taskId));

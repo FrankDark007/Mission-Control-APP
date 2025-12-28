@@ -30,7 +30,7 @@ interface Task {
 
 interface TaskInboxProps {
   tasks: Task[];
-  onExecute: (task: Task) => void;
+  onExecute: (task: Task) => Promise<{ success: boolean; error?: string }>;
   onDismiss: (taskId: string) => void;
   onViewDetails: (task: Task) => void;
   onClearAll?: () => void;
@@ -61,6 +61,8 @@ const TaskInbox: React.FC<TaskInboxProps> = ({
   const [isOpen, setIsOpen] = useState(true);
   const [isMinimized, setIsMinimized] = useState(false);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [executingTaskId, setExecutingTaskId] = useState<string | null>(null);
+  const [executionError, setExecutionError] = useState<string | null>(null);
 
   const pendingTasks = tasks.filter(t => t.status === 'pending');
   const pendingCount = pendingTasks.length;
@@ -83,6 +85,22 @@ const TaskInbox: React.FC<TaskInboxProps> = ({
     const diffHours = Math.floor(diffMins / 60);
     if (diffHours < 24) return `${diffHours}h ago`;
     return `${Math.floor(diffHours / 24)}d ago`;
+  };
+
+  const handleExecute = async (task: Task) => {
+    setExecutingTaskId(task.id);
+    setExecutionError(null);
+
+    try {
+      const result = await onExecute(task);
+      if (!result.success) {
+        setExecutionError(result.error || 'Failed to spawn agent');
+      }
+    } catch (err) {
+      setExecutionError(err instanceof Error ? err.message : 'Spawn failed');
+    } finally {
+      setExecutingTaskId(null);
+    }
   };
 
   if (!isOpen) {
@@ -178,11 +196,25 @@ const TaskInbox: React.FC<TaskInboxProps> = ({
                     {/* Actions */}
                     <div className="flex items-center gap-2">
                       <button
-                        onClick={() => onExecute(task)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 bg-google-blue hover:bg-google-blue/80 text-white text-xs font-medium rounded-lg transition-colors"
+                        onClick={() => handleExecute(task)}
+                        disabled={executingTaskId === task.id}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 text-white text-xs font-medium rounded-lg transition-colors ${
+                          executingTaskId === task.id
+                            ? 'bg-google-blue/50 cursor-not-allowed'
+                            : 'bg-google-blue hover:bg-google-blue/80'
+                        }`}
                       >
-                        <Play size={12} />
-                        Execute
+                        {executingTaskId === task.id ? (
+                          <>
+                            <Loader2 size={12} className="animate-spin" />
+                            Spawning...
+                          </>
+                        ) : (
+                          <>
+                            <Play size={12} />
+                            Execute
+                          </>
+                        )}
                       </button>
                       <button
                         onClick={() => {
@@ -201,6 +233,14 @@ const TaskInbox: React.FC<TaskInboxProps> = ({
                         <Trash2 size={14} />
                       </button>
                     </div>
+
+                    {/* Execution Error */}
+                    {executionError && executingTaskId === null && (
+                      <div className="mt-2 flex items-center gap-2 p-2 bg-red-500/10 border border-red-500/30 rounded-lg">
+                        <AlertCircle size={12} className="text-red-400" />
+                        <span className="text-[10px] text-red-400">{executionError}</span>
+                      </div>
+                    )}
                   </div>
                 );
               })}

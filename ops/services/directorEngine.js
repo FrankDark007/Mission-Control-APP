@@ -123,12 +123,15 @@ class DirectorEngine {
     this.callAI = null;
     this.integrations = null;
     this.io = null;
+    this.agentManager = null;
   }
 
-  init({ callAI, integrations, io }) {
+  init({ callAI, integrations, io, agentManager }) {
     this.callAI = callAI;
     this.integrations = integrations;
     this.io = io;
+    this.agentManager = agentManager;
+    console.log(`[DirectorEngine] Initialized with agentManager: ${!!agentManager}`);
   }
 
   /**
@@ -295,6 +298,14 @@ RESPOND WITH ONLY THE JSON, NO OTHER TEXT.`;
     console.log(`[DirectorEngine] 🚀 Starting AUTONOMOUS Director for: ${name}`);
     console.log(`[DirectorEngine] Model: ${directorModel}`);
 
+    // Enable armed mode for automatic task execution
+    if (this.agentManager) {
+      this.agentManager.setArmedMode(true);
+      console.log(`[DirectorEngine] 🔫 Armed mode ENABLED for automatic execution`);
+    } else {
+      console.warn(`[DirectorEngine] ⚠️ agentManager not available - tasks will not auto-execute`);
+    }
+
     // Create director state
     const directorState = {
       projectId,
@@ -323,6 +334,9 @@ RESPOND WITH ONLY THE JSON, NO OTHER TEXT.`;
       // Initial analysis and planning
       await this._runDirectorCycle(projectId, 'initial');
 
+      // Execute any tasks created during initial planning
+      await this._executeReadyTasks(projectId);
+
       // Start the monitoring loop
       this._startMonitoringLoop(projectId);
 
@@ -330,7 +344,7 @@ RESPOND WITH ONLY THE JSON, NO OTHER TEXT.`;
         success: true,
         projectId,
         status: 'active',
-        message: 'Director is now AUTONOMOUSLY orchestrating the project'
+        message: 'Director is now AUTONOMOUSLY orchestrating the project with auto-execution enabled'
       };
 
     } catch (error) {
@@ -562,12 +576,21 @@ END_TOOL_CALL`;
 
         if (hasChanges) {
           console.log(`[DirectorEngine] 📢 Changes detected for ${state.projectName}`);
+
+          // First, execute any pending/ready tasks
+          await this._executeReadyTasks(projectId);
+
+          // Then run director cycle to create new tasks if needed
           await this._runDirectorCycle(projectId, 'task_change');
         } else {
           // Check for idle timeout
           const idleTime = Date.now() - new Date(state.lastActivityAt).getTime();
           if (idleTime > MAX_IDLE_TIME) {
             console.log(`[DirectorEngine] ⏰ Idle timeout for ${state.projectName}`);
+
+            // Execute any pending tasks first
+            await this._executeReadyTasks(projectId);
+
             await this._runDirectorCycle(projectId, 'idle_timeout');
           }
         }
@@ -885,18 +908,33 @@ END_TOOL_CALL`;
       createdAt: new Date().toISOString()
     });
 
-    console.log(`[DirectorEngine] 📋 Task CREATED (not executed): ${params.title}`);
-    console.log(`[DirectorEngine] ⏳ Task ${task.id} awaiting Claude Code execution`);
+    console.log(`[DirectorEngine] 📋 Task CREATED: ${params.title}`);
 
-    // Return explicit status showing task was CREATED but NOT EXECUTED
-    return {
-      success: true,
-      taskId: task.id,
-      status: 'pending',
-      executed: false,
-      awaitingExecution: 'CLAUDE_CODE',
-      message: `Task "${params.title}" created and queued for Claude Code. Task has NOT been executed yet - it is awaiting Claude Code to pick it up.`
-    };
+    // AUTOMATICALLY SPAWN AGENT TO EXECUTE THE TASK
+    console.log(`[DirectorEngine] 🚀 Auto-spawning agent for task: ${task.id}`);
+    const spawnResult = await this._spawnAgentForTask(task, state);
+
+    if (spawnResult.success) {
+      return {
+        success: true,
+        taskId: task.id,
+        status: 'in_progress',
+        executed: true,
+        agentId: spawnResult.agentId,
+        pid: spawnResult.pid,
+        message: `Task "${params.title}" created and agent spawned (PID: ${spawnResult.pid}). Execution in progress.`
+      };
+    } else {
+      // Agent spawn failed - task still pending
+      return {
+        success: true,
+        taskId: task.id,
+        status: 'pending',
+        executed: false,
+        spawnError: spawnResult.error,
+        message: `Task "${params.title}" created but agent spawn failed: ${spawnResult.error}`
+      };
+    }
   }
 
   /**
@@ -1177,6 +1215,207 @@ END_TOOL_CALL`;
   _emit(event, data) {
     if (this.io) {
       this.io.emit(event, data);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // TASK EXECUTION - Automatically spawn Claude Code agents
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Spawn a Claude Code agent to execute a task
+   * This is the CORE method that makes the Director actually execute work
+   */
+  async _spawnAgentForTask(task, state) {
+    console.log(`[DirectorEngine] 🚀 Spawning agent for task: ${task.title}`);
+
+    if (!this.agentManager) {
+      console.error(`[DirectorEngine] ❌ Cannot spawn agent - agentManager not initialized`);
+      return { success: false, error: 'agentManager not initialized' };
+    }
+
+    // Build RICH prompt with full project context
+    let prompt = '';
+
+    // 1. Project Context - so Claude knows the bigger picture
+    const project = projectService.getProject(task.projectId);
+    if (project) {
+      prompt += `# Project Context\n`;
+      prompt += `**Project:** ${project.name}\n`;
+      if (project.description) {
+        prompt += `**Description:** ${project.description}\n`;
+      }
+      prompt += `**Overall Goal:** ${project.instructions}\n`;
+      prompt += `**Current Phase:** ${project.phase || state.phase}\n\n`;
+    }
+
+    // 2. Related Tasks - so Claude knows what else is being done
+    const allTasks = claudeCodeBridge.getAllTasks({ projectId: task.projectId });
+    if (allTasks.length > 1) {
+      prompt += `## Project Tasks Overview\n`;
+      prompt += `This task is part of a larger project. Here's the full task list:\n`;
+      allTasks.forEach((t, i) => {
+        const status = t.id === task.id ? '→ CURRENT' : t.status;
+        prompt += `${i + 1}. [${status}] ${t.title}\n`;
+      });
+      prompt += `\n`;
+    }
+
+    // 3. Completed Task Results - so Claude can build on previous work
+    const completedTasks = allTasks.filter(t => t.status === 'completed' && t.result);
+    if (completedTasks.length > 0) {
+      prompt += `## Previous Work Completed\n`;
+      completedTasks.forEach(t => {
+        prompt += `- **${t.title}**: ${t.result?.summary || 'Completed'}\n`;
+        if (t.result?.filesCreated?.length > 0) {
+          prompt += `  Files created: ${t.result.filesCreated.join(', ')}\n`;
+        }
+      });
+      prompt += `\n`;
+    }
+
+    // 4. Available Artifacts - research, designs, data the task can use
+    const artifacts = claudeCodeBridge.getArtifacts(task.projectId);
+    if (artifacts.length > 0) {
+      prompt += `## Available Artifacts\n`;
+      prompt += `These resources have been created for this project:\n`;
+      artifacts.forEach(a => {
+        prompt += `- **${a.name}** (${a.type}): ${a.description || 'No description'}\n`;
+        if (a.type === 'research' && a.content?.answer) {
+          prompt += `  Key findings: ${a.content.answer.slice(0, 200)}...\n`;
+        }
+      });
+      prompt += `\n`;
+    }
+
+    // 5. The Actual Task
+    prompt += `---\n\n`;
+    prompt += `# Your Task: ${task.title}\n\n`;
+    prompt += task.instructions;
+
+    // 6. Acceptance Criteria
+    if (task.context?.acceptanceCriteria?.length > 0) {
+      prompt += `\n\n## Acceptance Criteria\n`;
+      task.context.acceptanceCriteria.forEach((c, i) => {
+        prompt += `${i + 1}. ${c}\n`;
+      });
+    }
+
+    // 7. Integration Reminder
+    prompt += `\n\n## Important\n`;
+    prompt += `- Your work should integrate with the existing project structure\n`;
+    prompt += `- Follow patterns established by previous tasks\n`;
+    prompt += `- Ensure compatibility with other components being built\n`;
+
+    try {
+      // Enable armed mode for execution
+      const wasArmed = this.agentManager.isArmedMode();
+      this.agentManager.setArmedMode(true);
+
+      const result = await this.agentManager.spawnAgentImmediate({
+        missionId: task.projectId,
+        taskId: task.id,
+        taskName: task.title,
+        prompt,
+        model: 'claude-sonnet-4',
+        autoPilot: true,
+        riskLevel: task.priority === 'critical' ? 'high' : 'medium'
+      }, {
+        riskThreshold: 'high'
+      });
+
+      // Restore armed mode if it wasn't enabled before
+      if (!wasArmed) {
+        this.agentManager.setArmedMode(false);
+      }
+
+      if (result.success) {
+        // Update task status
+        claudeCodeBridge.startTask(task.id);
+
+        // Track spawned agent
+        state.spawnedAgents = state.spawnedAgents || {};
+        state.spawnedAgents[task.id] = {
+          agentId: result.agentId,
+          pid: result.pid,
+          spawnedAt: new Date().toISOString()
+        };
+
+        this._emit('director-agent-spawned', {
+          projectId: task.projectId,
+          taskId: task.id,
+          agentId: result.agentId,
+          pid: result.pid
+        });
+
+        console.log(`[DirectorEngine] ✅ Agent spawned: ${result.agentId} (PID: ${result.pid})`);
+        return { success: true, agentId: result.agentId, pid: result.pid };
+      } else {
+        console.error(`[DirectorEngine] ❌ Failed to spawn agent: ${result.error}`);
+        return { success: false, error: result.error };
+      }
+    } catch (error) {
+      console.error(`[DirectorEngine] ❌ Spawn error:`, error.message);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Check for ready tasks and spawn agents for them
+   * Called after task creation and during monitoring
+   */
+  async _executeReadyTasks(projectId) {
+    const state = this.activeDirectors.get(projectId);
+    if (!state) return;
+
+    // Get pending tasks from inbox
+    const pendingTasks = claudeCodeBridge.getAllTasks({
+      projectId,
+      status: 'pending'
+    });
+
+    console.log(`[DirectorEngine] 📋 Found ${pendingTasks.length} pending tasks for ${state.projectName}`);
+
+    // Also check for ready tasks in taskService
+    const readyTasks = taskService.getReadyTasks(projectId);
+    console.log(`[DirectorEngine] 📋 Found ${readyTasks.length} ready tasks in taskService`);
+
+    // Combine and dedupe
+    const allPending = [...pendingTasks];
+    for (const rt of readyTasks) {
+      if (!allPending.find(t => t.id === rt.id)) {
+        allPending.push(rt);
+      }
+    }
+
+    // Limit concurrent agents (don't spawn too many at once)
+    const maxConcurrent = 2;
+    const currentlyRunning = Object.keys(state.spawnedAgents || {}).filter(taskId => {
+      const task = claudeCodeBridge.getTask(taskId);
+      return task && task.status === 'in_progress';
+    }).length;
+
+    const canSpawn = Math.max(0, maxConcurrent - currentlyRunning);
+    console.log(`[DirectorEngine] 🔢 Currently running: ${currentlyRunning}, can spawn: ${canSpawn}`);
+
+    if (canSpawn === 0) {
+      console.log(`[DirectorEngine] ⏸️ Max concurrent agents reached, waiting...`);
+      return;
+    }
+
+    // Spawn agents for pending tasks
+    const toSpawn = allPending.slice(0, canSpawn);
+    for (const task of toSpawn) {
+      // Skip if already being worked on
+      if (state.spawnedAgents?.[task.id]) {
+        console.log(`[DirectorEngine] ⏭️ Task ${task.id} already has an agent`);
+        continue;
+      }
+
+      await this._spawnAgentForTask(task, state);
+
+      // Small delay between spawns
+      await new Promise(r => setTimeout(r, 1000));
     }
   }
 }

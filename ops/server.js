@@ -54,7 +54,11 @@ app.use(express.json({ limit: '50mb' }));
 app.use('/screenshots', express.static(SCREENSHOTS_DIR));
 
 if (process.env.NODE_ENV === 'production') {
-    app.use(express.static(join(__dirname, 'client/dist')));
+    app.use(express.static(join(__dirname, 'client/dist'), { index: 'index.html' }));
+    app.get('*', (req, res, next) => {
+        if (req.path.startsWith('/api') || req.path.startsWith('/mcp') || req.path.startsWith('/socket.io')) return next();
+        res.sendFile(join(__dirname, 'client/dist/index.html'));
+    });
 }
 
 const PORT = process.env.PORT || 3001;
@@ -388,7 +392,7 @@ mcpServer.initV8(stateStore);
 claudeCodeBridge.init({ io, stateStore });
 
 // Initialize Director Engine with dependencies (pass instance, not class)
-directorEngine.init({ callAI, integrations, io });
+directorEngine.init({ callAI, integrations, io, agentManager });
 
 // Initialize Sentinel Agent with dependencies
 sentinelAgent.init({ io, mcpClient: null, callAI });
@@ -487,9 +491,90 @@ app.get('/api/bridge/projects/:projectId/status', (req, res) => {
 });
 
 // ==========================================
-// 🤖 AGENT API ROUTES
+// 🔫 ARMED MODE & TASK SPAWN ROUTES
 // ==========================================
 
+// Get armed mode status
+app.get('/api/armed-mode', (req, res) => {
+    res.json({
+        armed: agentManager.isArmedMode(),
+        stateStoreArmed: stateStore.getArmedMode?.() ?? false
+    });
+});
+
+// Set armed mode
+app.post('/api/armed-mode', (req, res) => {
+    const { armed } = req.body;
+    agentManager.setArmedMode(armed);
+    if (stateStore.setArmedMode) {
+        stateStore.setArmedMode(armed);
+    }
+    io.emit('armed-mode-changed', { armed });
+    res.json({ success: true, armed });
+});
+
+// Spawn agent from inbox task - actually runs claude -p [prompt]
+app.post('/api/tasks/:taskId/spawn', async (req, res) => {
+    try {
+        // Get task from Claude Code Bridge
+        const task = claudeCodeBridge.getTask(req.params.taskId);
+        if (!task) {
+            return res.status(404).json({ success: false, error: 'Task not found' });
+        }
+
+        // Enable armed mode for this execution
+        const wasArmed = agentManager.isArmedMode();
+        agentManager.setArmedMode(true);
+
+        // Build the prompt from task
+        let prompt = task.instructions;
+        if (task.title) {
+            prompt = `# Task: ${task.title}\n\n${prompt}`;
+        }
+        if (task.context?.acceptanceCriteria?.length > 0) {
+            prompt += `\n\n## Acceptance Criteria:\n${task.context.acceptanceCriteria.map((c, i) => `${i+1}. ${c}`).join('\n')}`;
+        }
+
+        // Spawn the agent
+        const result = await agentManager.spawnAgentImmediate({
+            missionId: task.projectId,
+            taskId: task.id,
+            taskName: task.title,
+            prompt,
+            model: 'claude-sonnet-4',
+            autoPilot: true,
+            riskLevel: task.priority === 'critical' ? 'high' : 'medium'
+        }, {
+            riskThreshold: 'high' // Allow up to high risk
+        });
+
+        // Restore armed mode if it wasn't enabled before
+        if (!wasArmed) {
+            agentManager.setArmedMode(false);
+        }
+
+        if (result.success) {
+            // Update task status
+            claudeCodeBridge.startTask(req.params.taskId);
+
+            // Emit socket event
+            io.emit('agent-spawned', {
+                taskId: task.id,
+                agentId: result.agentId,
+                pid: result.pid
+            });
+        }
+
+        res.json(result);
+    } catch (error) {
+        console.error('[Spawn Error]', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ==========================================
+// 🤖 AGENT API ROUTES
+// ==========================================
 
 // Spawn a new Claude Code agent
 app.post('/api/agents/spawn', async (req, res) => {
