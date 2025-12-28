@@ -128,6 +128,16 @@ class ProjectService {
       directorAgentId: null,
       missionIds: [],
       bootstrapArtifactId: null,
+
+      // Task and Artifact linking (Architecture Fix)
+      taskIds: [],
+      artifactIds: [],
+      phases: [],
+      totalTasks: 0,
+      completedTasks: 0,
+      failedTasks: 0,
+      activeTaskId: null,
+
       createdAt: now,
       updatedAt: now,
       lastActivityAt: now,
@@ -507,6 +517,144 @@ ${project.instructions}
 4. Spawn appropriate sub-agents to begin
 
 Begin by outputting your analysis and initial execution plan.`;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ARCHITECTURE FIX: Task and Artifact Linking Methods
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Link a task to a project
+   */
+  async linkTask(projectId, taskId) {
+    const project = this.projects[projectId];
+    if (!project) return;
+
+    if (!project.taskIds) project.taskIds = [];
+    if (!project.taskIds.includes(taskId)) {
+      project.taskIds.push(taskId);
+      project.totalTasks = project.taskIds.length;
+      project.updatedAt = new Date().toISOString();
+      this._saveProjects();
+      this._emitUpdate();
+    }
+  }
+
+  /**
+   * Link an artifact to a project
+   */
+  async linkArtifact(projectId, artifactId) {
+    const project = this.projects[projectId];
+    if (!project) return;
+
+    if (!project.artifactIds) project.artifactIds = [];
+    if (!project.artifactIds.includes(artifactId)) {
+      project.artifactIds.push(artifactId);
+      project.updatedAt = new Date().toISOString();
+      this._saveProjects();
+      this._emitUpdate();
+    }
+  }
+
+  /**
+   * Update task counts on a project
+   */
+  async updateTaskCounts(projectId) {
+    const project = this.projects[projectId];
+    if (!project) return;
+
+    // Import taskService dynamically to avoid circular dependency
+    const { default: taskService } = await import('./taskService.js');
+    const tasks = taskService.getTasksByProject(projectId);
+
+    project.totalTasks = tasks.length;
+    project.completedTasks = tasks.filter(t => t.status === 'complete').length;
+    project.failedTasks = tasks.filter(t => t.status === 'failed').length;
+    project.updatedAt = new Date().toISOString();
+
+    this._saveProjects();
+    this._emitUpdate();
+  }
+
+  /**
+   * Update project with new data
+   */
+  async updateProject(projectId, updates) {
+    const project = this.projects[projectId];
+    if (!project) return { success: false, error: 'Project not found' };
+
+    Object.assign(project, updates, {
+      updatedAt: new Date().toISOString(),
+      _stateVersion: (project._stateVersion || 0) + 1
+    });
+
+    this._saveProjects();
+    this._emitUpdate();
+
+    return { success: true, project };
+  }
+
+  /**
+   * Get project with full task tree (phases → tasks → artifacts)
+   */
+  async getProjectWithTree(projectId) {
+    const project = this.projects[projectId];
+    if (!project) return null;
+
+    // Import services dynamically to avoid circular dependency
+    const { default: taskService } = await import('./taskService.js');
+    const { default: artifactService } = await import('./artifactService.js');
+
+    const tasks = taskService.getTasksByProject(projectId);
+    const artifacts = artifactService.getArtifactsByProject(projectId);
+
+    // Group tasks by phase
+    const phasesGrouped = taskService.getTasksByPhaseGrouped(projectId);
+
+    // Convert to array and attach artifacts
+    const phases = Object.values(phasesGrouped).map(phase => {
+      // Normalize and attach artifacts to tasks
+      const tasksWithArtifacts = phase.tasks.map(task => ({
+        id: task.id,
+        projectId: task.projectId,
+        phaseIndex: task.phaseIndex,
+        phaseLabel: task.phaseName,
+        title: task.title,
+        instructions: task.prompt || task.description || '',
+        status: task.status,
+        dependencies: task.deps || [],
+        artifactIds: task.artifactIds || [],
+        assignedTo: task.assignedAgent,
+        executionLog: [],
+        result: task.outputSummary,
+        createdAt: task.createdAt,
+        startedAt: task.startedAt,
+        completedAt: task.completedAt,
+        _stateVersion: task._stateVersion,
+        artifacts: artifacts.filter(a => a.taskId === task.id)
+      }));
+
+      // Get phase-level artifacts (not linked to specific tasks)
+      const phaseArtifacts = artifacts.filter(
+        a => a.phaseIndex === phase.index && !a.taskId
+      );
+
+      return {
+        index: phase.index,
+        label: phase.name, // Map 'name' to 'label' for frontend
+        tasks: tasksWithArtifacts,
+        artifacts: phaseArtifacts,
+        status: phase.status
+      };
+    }).sort((a, b) => a.index - b.index);
+
+    // Return flattened structure matching frontend ProjectTree type
+    return {
+      ...project,
+      phases,
+      taskIds: project.taskIds || [],
+      artifactIds: project.artifactIds || []
+    };
   }
 
   /**

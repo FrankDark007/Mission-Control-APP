@@ -11,6 +11,7 @@ const ChatLab = () => {
     const [thinkingBudget, setThinkingBudget] = useState(0); 
     const [useSensory, setUseSensory] = useState(false);
     const [useLocation, setUseLocation] = useState(false);
+    const [useSearch, setUseSearch] = useState(false);
     const [sensorySnapshot, setSensorySnapshot] = useState<string | null>(null);
     const [location, setLocation] = useState<{ latitude: number, longitude: number } | null>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
@@ -72,17 +73,23 @@ const ChatLab = () => {
                     systemInstruction: "You are the Tactical Swarm Commander. Analyze visual sensory payload if present.",
                     latLng: currentLocation,
                     thinkingBudget: currentBudget,
-                    image: currentImage
+                    image: currentImage,
+                    useSearch
                 })
             });
             const data = await res.json();
+
+            // Determine which model was used based on grounding options
+            let modelDisplay = currentBudget > 0 ? 'gemini-3-pro-preview' : 'gemini-3-flash-preview';
+            if (useSearch) modelDisplay = 'gemini-2.5-flash + Search';
+            else if (currentLocation) modelDisplay = 'gemini-2.5-flash + Maps';
 
             const aiMsg: ChatMessage = {
                 id: (Date.now() + 1).toString(),
                 role: 'ai',
                 content: data.text || "No response received.",
                 timestamp: Date.now(),
-                modelUsed: currentLocation ? 'gemini-2.5-flash' : (currentBudget > 0 ? 'gemini-3-pro-preview' : 'gemini-3-flash-preview'),
+                modelUsed: modelDisplay,
                 groundingChunks: data.groundingChunks || []
             };
             setMessages(prev => [...prev, aiMsg]);
@@ -124,6 +131,15 @@ const ChatLab = () => {
                     >
                         <MapPin size={14} className={useLocation ? 'animate-bounce' : ''} />
                         <span className="text-[10px] font-black uppercase hidden sm:inline">Location</span>
+                    </button>
+                    <div className="w-px h-6 bg-dark-700 hidden sm:block" />
+                    <button
+                        onClick={() => setUseSearch(!useSearch)}
+                        title="Toggle Google Search Grounding"
+                        className={`flex items-center gap-2 px-2 md:px-3 py-1.5 rounded-lg md:rounded-xl transition-all ${useSearch ? 'bg-google-red text-white shadow-lg' : 'text-gray-400 hover:text-gray-300'}`}
+                    >
+                        <Search size={14} className={useSearch ? 'animate-pulse' : ''} />
+                        <span className="text-[10px] font-black uppercase hidden sm:inline">Search</span>
                     </button>
                     <div className="w-px h-6 bg-dark-700 hidden sm:block" />
                     <div className="flex items-center gap-2 md:gap-3">
@@ -230,7 +246,7 @@ const ChatLab = () => {
                             value={input}
                             onChange={(e) => setInput(e.target.value)}
                             onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                            placeholder={useSensory ? "Instruct swarm with visual analysis..." : useLocation ? "Query with geographic context..." : "Query architectural intelligence..."}
+                            placeholder={useSensory ? "Instruct swarm with visual analysis..." : useSearch ? "Query with real-time web search..." : useLocation ? "Query with geographic context..." : "Query architectural intelligence..."}
                             className="flex-1 bg-transparent border-none outline-none px-4 md:px-6 lg:px-8 py-3 md:py-4 lg:py-5 text-sm text-gray-200"
                         />
                         <button

@@ -25,6 +25,7 @@ const INBOX_FILE = path.join(BRIDGE_DIR, 'inbox.json');
 const PROGRESS_FILE = path.join(BRIDGE_DIR, 'progress.json');
 const ARTIFACTS_FILE = path.join(BRIDGE_DIR, 'artifacts.json');
 const FEEDBACK_FILE = path.join(BRIDGE_DIR, 'feedback.json');
+const PROJECTS_DIR = path.join(BRIDGE_DIR, 'projects');
 
 // Task status enum
 const TaskStatus = {
@@ -77,6 +78,7 @@ class ClaudeCodeBridge {
    */
   _ensureDirectories() {
     fs.ensureDirSync(BRIDGE_DIR);
+    fs.ensureDirSync(PROJECTS_DIR);
 
     if (!fs.existsSync(INBOX_FILE)) {
       fs.writeJsonSync(INBOX_FILE, { tasks: [] }, { spaces: 2 });
@@ -90,6 +92,55 @@ class ClaudeCodeBridge {
     if (!fs.existsSync(FEEDBACK_FILE)) {
       fs.writeJsonSync(FEEDBACK_FILE, { feedback: [] }, { spaces: 2 });
     }
+  }
+
+  /**
+   * Get or create project directory structure
+   */
+  _getProjectDir(projectId) {
+    const projectDir = path.join(PROJECTS_DIR, projectId);
+    const artifactsDir = path.join(projectDir, 'artifacts');
+    const researchDir = path.join(artifactsDir, 'research');
+    const designDir = path.join(artifactsDir, 'design');
+    const codeDir = path.join(artifactsDir, 'code');
+    const contentDir = path.join(artifactsDir, 'content');
+    const imagesDir = path.join(artifactsDir, 'images');
+
+    // Ensure all directories exist
+    fs.ensureDirSync(projectDir);
+    fs.ensureDirSync(artifactsDir);
+    fs.ensureDirSync(researchDir);
+    fs.ensureDirSync(designDir);
+    fs.ensureDirSync(codeDir);
+    fs.ensureDirSync(contentDir);
+    fs.ensureDirSync(imagesDir);
+
+    return {
+      root: projectDir,
+      artifacts: artifactsDir,
+      research: researchDir,
+      design: designDir,
+      code: codeDir,
+      content: contentDir,
+      images: imagesDir
+    };
+  }
+
+  /**
+   * Get the appropriate subfolder for an artifact type
+   */
+  _getArtifactSubfolder(type) {
+    const typeMap = {
+      'research': 'research',
+      'data': 'research',
+      'svg': 'design',
+      'image': 'images',
+      'design': 'design',
+      'code': 'code',
+      'config': 'code',
+      'content': 'content'
+    };
+    return typeMap[type] || 'artifacts';
   }
 
   /**
@@ -221,6 +272,36 @@ class ClaudeCodeBridge {
     tasks.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
     return tasks.slice(0, limit);
+  }
+
+  /**
+   * Clear all tasks from the inbox
+   * Optionally filter by projectId or status
+   */
+  clearAllTasks({ projectId, status } = {}) {
+    const originalCount = this.inbox.tasks.length;
+
+    if (projectId && status) {
+      this.inbox.tasks = this.inbox.tasks.filter(
+        t => !(t.projectId === projectId && t.status === status)
+      );
+    } else if (projectId) {
+      this.inbox.tasks = this.inbox.tasks.filter(t => t.projectId !== projectId);
+    } else if (status) {
+      this.inbox.tasks = this.inbox.tasks.filter(t => t.status !== status);
+    } else {
+      this.inbox.tasks = [];
+    }
+
+    const deletedCount = originalCount - this.inbox.tasks.length;
+    this._saveState();
+
+    // Emit socket event
+    if (this.io) {
+      this.io.emit('inbox-cleared', { deletedCount });
+    }
+
+    return { success: true, deletedCount };
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -370,6 +451,7 @@ class ClaudeCodeBridge {
   /**
    * Register an artifact for Claude Code to use
    * Called by sub-agents (Refract, Creative, Research, etc.)
+   * Artifacts are organized into project folders by type
    */
   registerArtifact({
     projectId,
@@ -383,15 +465,51 @@ class ClaudeCodeBridge {
     createdBy,           // Agent ID
     instructions = null  // How Claude Code should use this
   }) {
+    const artifactId = `artifact_${uuidv4().slice(0, 8)}`;
+    let projectFilePath = null;
+
+    // If we have a projectId, organize into project folder
+    if (projectId) {
+      const dirs = this._getProjectDir(projectId);
+      const subfolder = this._getArtifactSubfolder(type);
+      const targetDir = dirs[subfolder] || dirs.artifacts;
+
+      // Generate filename from name
+      const safeName = name.replace(/[^a-zA-Z0-9-_]/g, '_').toLowerCase();
+      const ext = this._getExtensionForType(type, filePath, content);
+      const filename = `${safeName}_${artifactId.slice(-6)}${ext}`;
+      projectFilePath = path.join(targetDir, filename);
+
+      // Save artifact content to project folder
+      try {
+        if (filePath && fs.existsSync(filePath)) {
+          // Copy existing file to project folder
+          fs.copySync(filePath, projectFilePath);
+          console.log(`[ClaudeCodeBridge] Copied artifact to ${projectFilePath}`);
+        } else if (content) {
+          // Write content to project folder
+          if (typeof content === 'object') {
+            fs.writeJsonSync(projectFilePath, content, { spaces: 2 });
+          } else {
+            fs.writeFileSync(projectFilePath, content, 'utf-8');
+          }
+          console.log(`[ClaudeCodeBridge] Created artifact at ${projectFilePath}`);
+        }
+      } catch (err) {
+        console.error(`[ClaudeCodeBridge] Failed to save artifact to project folder:`, err.message);
+      }
+    }
+
     const artifact = {
-      id: `artifact_${uuidv4().slice(0, 8)}`,
+      id: artifactId,
       projectId,
       taskId,
       type,
       name,
       description,
-      filePath,
-      content,
+      filePath: projectFilePath || filePath, // Prefer project path
+      originalFilePath: filePath,            // Keep original for reference
+      content: projectFilePath ? null : content, // Don't store content if saved to file
       metadata,
       createdBy,
       instructions,
@@ -402,6 +520,12 @@ class ClaudeCodeBridge {
 
     this.artifacts.artifacts.push(artifact);
     this._saveState();
+
+    // Also save artifact manifest to project folder
+    if (projectId) {
+      this._saveProjectManifest(projectId);
+    }
+
     this._emit('artifact-registered', artifact);
 
     console.log(`[ClaudeCodeBridge] Artifact registered: ${artifact.id} - ${name}`);
@@ -409,10 +533,75 @@ class ClaudeCodeBridge {
   }
 
   /**
-   * Get artifacts for a project
+   * Get file extension based on artifact type
+   */
+  _getExtensionForType(type, filePath, content) {
+    // If we have an original file, use its extension
+    if (filePath) {
+      const ext = path.extname(filePath);
+      if (ext) return ext;
+    }
+
+    // Map types to extensions
+    const extMap = {
+      'svg': '.svg',
+      'image': '.png',
+      'code': '.txt',
+      'config': '.json',
+      'content': '.md',
+      'research': '.json',
+      'data': '.json',
+      'design': '.json'
+    };
+
+    return extMap[type] || '.txt';
+  }
+
+  /**
+   * Save project artifact manifest
+   */
+  _saveProjectManifest(projectId) {
+    const dirs = this._getProjectDir(projectId);
+    const manifestPath = path.join(dirs.root, 'manifest.json');
+
+    const projectArtifacts = this.artifacts.artifacts.filter(a => a.projectId === projectId);
+    const manifest = {
+      projectId,
+      updatedAt: new Date().toISOString(),
+      artifactCount: projectArtifacts.length,
+      artifacts: projectArtifacts.map(a => ({
+        id: a.id,
+        name: a.name,
+        type: a.type,
+        filePath: a.filePath,
+        createdAt: a.createdAt,
+        createdBy: a.createdBy
+      })),
+      byType: {
+        research: projectArtifacts.filter(a => a.type === 'research' || a.type === 'data').length,
+        design: projectArtifacts.filter(a => a.type === 'svg' || a.type === 'design' || a.type === 'image').length,
+        code: projectArtifacts.filter(a => a.type === 'code' || a.type === 'config').length,
+        content: projectArtifacts.filter(a => a.type === 'content').length
+      }
+    };
+
+    try {
+      fs.writeJsonSync(manifestPath, manifest, { spaces: 2 });
+    } catch (err) {
+      console.error(`[ClaudeCodeBridge] Failed to save manifest:`, err.message);
+    }
+  }
+
+  /**
+   * Get artifacts for a project (or all if no projectId)
    */
   getArtifacts(projectId, { type, unused = false } = {}) {
-    let artifacts = this.artifacts.artifacts.filter(a => a.projectId === projectId);
+    let artifacts = [...this.artifacts.artifacts];
+
+    // Only filter by projectId if provided
+    if (projectId) {
+      artifacts = artifacts.filter(a => a.projectId === projectId);
+    }
 
     if (type) {
       artifacts = artifacts.filter(a => a.type === type);
@@ -592,6 +781,174 @@ class ClaudeCodeBridge {
       pendingHelp: this.feedback.feedback.filter(f => !f.resolvedAt).length,
       lastActivity: this.progress.updates[this.progress.updates.length - 1]?.timestamp || null
     };
+  }
+
+  /**
+   * Get project folder structure and contents
+   */
+  getProjectFolders(projectId) {
+    if (!projectId) {
+      // Return list of all project folders
+      try {
+        const projects = fs.readdirSync(PROJECTS_DIR).filter(f => {
+          const stat = fs.statSync(path.join(PROJECTS_DIR, f));
+          return stat.isDirectory();
+        });
+        return { success: true, projects };
+      } catch (err) {
+        return { success: true, projects: [] };
+      }
+    }
+
+    const dirs = this._getProjectDir(projectId);
+    const manifestPath = path.join(dirs.root, 'manifest.json');
+
+    // Get folder contents
+    const getFolderContents = (dir) => {
+      try {
+        return fs.readdirSync(dir).map(f => {
+          const filePath = path.join(dir, f);
+          const stat = fs.statSync(filePath);
+          return {
+            name: f,
+            path: filePath,
+            isDirectory: stat.isDirectory(),
+            size: stat.size,
+            modified: stat.mtime
+          };
+        });
+      } catch (err) {
+        return [];
+      }
+    };
+
+    let manifest = null;
+    try {
+      if (fs.existsSync(manifestPath)) {
+        manifest = fs.readJsonSync(manifestPath);
+      }
+    } catch (err) {
+      // Ignore
+    }
+
+    return {
+      success: true,
+      projectId,
+      folders: {
+        root: dirs.root,
+        research: { path: dirs.research, files: getFolderContents(dirs.research) },
+        design: { path: dirs.design, files: getFolderContents(dirs.design) },
+        code: { path: dirs.code, files: getFolderContents(dirs.code) },
+        content: { path: dirs.content, files: getFolderContents(dirs.content) },
+        images: { path: dirs.images, files: getFolderContents(dirs.images) }
+      },
+      manifest
+    };
+  }
+
+  /**
+   * Migrate existing artifacts to project folders
+   * Call this to reorganize artifacts that were created before project folders existed
+   */
+  migrateArtifactsToProjectFolders() {
+    const migrated = [];
+    const failed = [];
+
+    for (const artifact of this.artifacts.artifacts) {
+      // Skip if no projectId
+      if (!artifact.projectId) {
+        continue;
+      }
+
+      // Skip if already in a project folder
+      if (artifact.filePath && artifact.filePath.includes('/projects/')) {
+        continue;
+      }
+
+      const dirs = this._getProjectDir(artifact.projectId);
+      const subfolder = this._getArtifactSubfolder(artifact.type);
+      const targetDir = dirs[subfolder] || dirs.artifacts;
+
+      // Generate filename
+      const safeName = artifact.name.replace(/[^a-zA-Z0-9-_]/g, '_').toLowerCase();
+      const ext = this._getExtensionForType(artifact.type, artifact.filePath || artifact.originalFilePath, artifact.content);
+      const filename = `${safeName}_${artifact.id.slice(-6)}${ext}`;
+      const newPath = path.join(targetDir, filename);
+
+      try {
+        // If we have an original file path, copy it
+        if (artifact.originalFilePath && fs.existsSync(artifact.originalFilePath)) {
+          fs.copySync(artifact.originalFilePath, newPath);
+          artifact.filePath = newPath;
+          migrated.push({ id: artifact.id, name: artifact.name, newPath });
+        }
+        // If we have inline content, write it
+        else if (artifact.content) {
+          if (typeof artifact.content === 'object') {
+            fs.writeJsonSync(newPath, artifact.content, { spaces: 2 });
+          } else {
+            fs.writeFileSync(newPath, artifact.content, 'utf-8');
+          }
+          artifact.filePath = newPath;
+          artifact.content = null; // Clear content since it's now in file
+          migrated.push({ id: artifact.id, name: artifact.name, newPath });
+        }
+        // If we have a filePath (not original), copy it
+        else if (artifact.filePath && fs.existsSync(artifact.filePath)) {
+          fs.copySync(artifact.filePath, newPath);
+          artifact.originalFilePath = artifact.filePath;
+          artifact.filePath = newPath;
+          migrated.push({ id: artifact.id, name: artifact.name, newPath });
+        }
+      } catch (err) {
+        failed.push({ id: artifact.id, name: artifact.name, error: err.message });
+      }
+    }
+
+    // Save updated artifacts
+    this._saveState();
+
+    // Update all project manifests
+    const projectIds = [...new Set(this.artifacts.artifacts.filter(a => a.projectId).map(a => a.projectId))];
+    for (const pid of projectIds) {
+      this._saveProjectManifest(pid);
+    }
+
+    console.log(`[ClaudeCodeBridge] Migration complete: ${migrated.length} migrated, ${failed.length} failed`);
+    return { success: true, migrated, failed };
+  }
+
+  /**
+   * Read artifact content from file
+   */
+  readArtifactContent(artifactId) {
+    const artifact = this.getArtifact(artifactId);
+    if (!artifact) {
+      return { success: false, error: 'Artifact not found' };
+    }
+
+    // If content is inline, return it
+    if (artifact.content) {
+      return { success: true, content: artifact.content };
+    }
+
+    // Read from file
+    if (artifact.filePath && fs.existsSync(artifact.filePath)) {
+      try {
+        const ext = path.extname(artifact.filePath).toLowerCase();
+        if (['.json'].includes(ext)) {
+          const content = fs.readJsonSync(artifact.filePath);
+          return { success: true, content, format: 'json' };
+        } else {
+          const content = fs.readFileSync(artifact.filePath, 'utf-8');
+          return { success: true, content, format: 'text' };
+        }
+      } catch (err) {
+        return { success: false, error: err.message };
+      }
+    }
+
+    return { success: false, error: 'No content available' };
   }
 }
 

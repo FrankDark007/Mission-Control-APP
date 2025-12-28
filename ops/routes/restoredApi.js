@@ -25,7 +25,7 @@ export const createRestoredRouter = ({ gitService, autopilot, agentManager, miss
 
     if (!existsSync(BASELINES_DIR)) mkdirSync(BASELINES_DIR, { recursive: true });
 
-    router.get('/models', (req, res) => res.json(aiCore.getModelRegistry()));
+    router.get('/models', (req, res) => res.json(aiCore.getModelRegistry().map(m => ({ id: m.id, name: m.name, provider: m.provider, apiModelId: m.apiModelId, ready: m.ready }))));
 
     // --- Builder Lab Endpoints ---
     async function getFileTree(dir) {
@@ -521,7 +521,7 @@ export const createRestoredRouter = ({ gitService, autopilot, agentManager, miss
 
     router.post('/chat', async (req, res) => {
         try {
-            const result = await aiCore.callAI(req.body.model, req.body.message, req.body.systemInstruction, req.body.latLng, req.body.thinkingBudget, 'commander', req.body.image);
+            const result = await aiCore.callAI(req.body.model, req.body.message, req.body.systemInstruction, req.body.latLng, req.body.thinkingBudget, 'commander', req.body.image, req.body.useSearch);
             res.json(result);
         } catch (e) { res.status(500).json({ error: e.message }); }
     });

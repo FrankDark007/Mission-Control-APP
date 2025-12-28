@@ -30,7 +30,7 @@ import { AgentManager } from './services/agentManager.js';
 import { MissionQueue } from './services/missionQueue.js';
 import { AutopilotController } from './services/autopilotController.js';
 import { createRestoredRouter } from './routes/restoredApi.js';
-import { createMCPRouter } from './mcp/mcpServer.js';
+import { MCPServer } from './mcp/mcpServer.js';
 import { Integrations } from './services/integrations/index.js';
 import { stateStore } from './state/StateStore.js';
 import projectService from './services/projectService.js';
@@ -39,6 +39,9 @@ import claudeBridgeRouter from './routes/claudeBridge.js';
 import { directorEngine } from './services/directorEngine.js';
 import { sentinelAgent } from './services/sentinelAgent.js';
 import sentinelRouter from './routes/sentinel.js';
+import skillsRouter from './routes/skills.js';
+import taskService from './services/taskService.js';
+import artifactService from './services/artifactService.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -89,22 +92,70 @@ async function loadModelRegistry() {
 
 await loadModelRegistry();
 
-async function callAI(modelKey, prompt, systemInstruction = "", latLng = null, thinkingBudget = 0, agentId = 'commander', image = null) {
+async function callAI(modelKey, prompt, systemInstruction = "", latLng = null, thinkingBudget = 0, agentId = 'commander', image = null, useSearch = false) {
     const config = MODEL_REGISTRY[modelKey];
     const provider = config?.provider || 'google';
     const apiKey = config?.apiKey || process.env.API_KEY;
     
     // Handle different providers
+    if (provider === 'anthropic') {
+        // Anthropic Claude models
+        const modelId = config?.apiModelId || 'claude-sonnet-4-20250514';
+
+        const messages = [];
+        if (image) {
+            // Claude vision format
+            const imageData = image.startsWith('data:') ? image.split(',')[1] : image;
+            const mediaType = image.startsWith('data:') ? image.split(';')[0].split(':')[1] : 'image/png';
+            messages.push({
+                role: 'user',
+                content: [
+                    { type: 'image', source: { type: 'base64', media_type: mediaType, data: imageData } },
+                    { type: 'text', text: prompt }
+                ]
+            });
+        } else {
+            messages.push({ role: 'user', content: prompt });
+        }
+
+        try {
+            const response = await fetch('https://api.anthropic.com/v1/messages', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-api-key': apiKey,
+                    'anthropic-version': '2023-06-01'
+                },
+                body: JSON.stringify({
+                    model: modelId,
+                    max_tokens: 4096,
+                    system: systemInstruction || undefined,
+                    messages
+                })
+            });
+
+            const data = await response.json();
+            if (data.error) {
+                throw new Error(data.error.message || 'Anthropic API error');
+            }
+            const text = data.content?.map(c => c.text).join('') || '';
+            return { text, groundingChunks: [] };
+        } catch (error) {
+            console.error('[Anthropic] API Error:', error.message);
+            throw error;
+        }
+    }
+
     if (provider === 'openai' || provider === 'openai-compatible') {
         // OpenAI and OpenAI-compatible (DeepSeek, etc.)
         const baseUrl = config?.baseUrl || 'https://api.openai.com/v1';
         const modelId = config?.apiModelId || 'gpt-4o';
-        
+
         const messages = [];
         if (systemInstruction) {
             messages.push({ role: 'system', content: systemInstruction });
         }
-        
+
         if (image) {
             messages.push({
                 role: 'user',
@@ -116,7 +167,7 @@ async function callAI(modelKey, prompt, systemInstruction = "", latLng = null, t
         } else {
             messages.push({ role: 'user', content: prompt });
         }
-        
+
         try {
             const response = await fetch(`${baseUrl}/chat/completions`, {
                 method: 'POST',
@@ -130,7 +181,7 @@ async function callAI(modelKey, prompt, systemInstruction = "", latLng = null, t
                     max_tokens: 4096
                 })
             });
-            
+
             const data = await response.json();
             if (data.error) {
                 throw new Error(data.error.message || 'OpenAI API error');
@@ -144,11 +195,23 @@ async function callAI(modelKey, prompt, systemInstruction = "", latLng = null, t
     
     // Default: Google Gemini
     const ai = new GoogleGenAI({ apiKey });
-    const modelToUse = config?.apiModelId || (thinkingBudget > 0 ? 'gemini-3-pro-preview' : 'gemini-3-flash-preview');
-    
+    // Use flash model for search grounding (required by Google)
+    const modelToUse = useSearch ? 'gemini-2.5-flash' : (config?.apiModelId || (thinkingBudget > 0 ? 'gemini-3-pro-preview' : 'gemini-3-flash-preview'));
+
     const genConfig = { systemInstruction };
     if (thinkingBudget > 0 && (modelToUse.includes('gemini-3') || modelToUse.includes('gemini-2.5'))) {
         genConfig.thinkingConfig = { thinkingBudget };
+    }
+
+    // Configure Google Search grounding tool
+    if (useSearch) {
+        genConfig.tools = [{ googleSearch: {} }];
+    }
+
+    // Configure Google Maps grounding (requires location)
+    if (latLng) {
+        genConfig.tools = genConfig.tools || [];
+        genConfig.tools.push({ googleMaps: { location: latLng } });
     }
 
     let contents = prompt;
@@ -174,13 +237,13 @@ integrations.initialize().then(status => {
     console.error('❌ Integrations init error:', err.message);
 });
 
-// MCP Router for Claude Desktop
-const mcpRouter = createMCPRouter({
+// MCP Server for Claude Desktop
+const mcpServer = new MCPServer({
     integrations,
     agentManager,
     callAI
 });
-app.use('/mcp', mcpRouter);
+app.use('/mcp', mcpServer.getRouter());
 
 // OAuth callback route for GSC/GA4
 app.get('/api/oauth/callback', async (req, res) => {
@@ -312,22 +375,32 @@ app.get('/api/edge/status', async (req, res) => {
 app.use('/api', restoredRouter);
 app.use('/api/claude', claudeBridgeRouter);
 app.use('/api/sentinel', sentinelRouter);
+app.use('/api/skills', skillsRouter);
 
 
 // Initialize State Store
 await stateStore.init();
 
+// V8: Initialize MCP Server delegation gate
+mcpServer.initV8(stateStore);
+
 // Initialize Claude Code Bridge with dependencies
 claudeCodeBridge.init({ io, stateStore });
 
-// Initialize Director Engine with dependencies
-directorEngine.init({ callAI, integrations: Integrations, io });
+// Initialize Director Engine with dependencies (pass instance, not class)
+directorEngine.init({ callAI, integrations, io });
 
 // Initialize Sentinel Agent with dependencies
 sentinelAgent.init({ io, mcpClient: null, callAI });
 
 // Initialize Project Service with dependencies
 projectService.init({ stateStore, agentManager, io, directorEngine });
+
+// Initialize Task Service with dependencies
+taskService.init({ projectService, claudeCodeBridge, io });
+
+// Initialize Artifact Service with dependencies
+artifactService.init({ projectService, taskService, io });
 
 // Emit projects on new socket connections
 io.on('connection', (socket) => {
@@ -337,6 +410,80 @@ io.on('connection', (socket) => {
 const server = httpServer.listen(PORT, () => {
     startSensoryDaemon();
     console.log(`🚀 MISSION CONTROL ACTIVE ON PORT: ${PORT}`);
+});
+
+// ==========================================
+// 🔗 CLAUDE CODE BRIDGE API ROUTES
+// ==========================================
+
+// Get all tasks from Claude Code Bridge
+app.get('/api/bridge/tasks', (req, res) => {
+    const { projectId, status, limit } = req.query;
+    const tasks = claudeCodeBridge.getAllTasks({
+        projectId,
+        status,
+        limit: limit ? parseInt(limit) : 50
+    });
+    res.json({ tasks });
+});
+
+// Get pending tasks for Claude Code
+app.get('/api/bridge/tasks/pending', (req, res) => {
+    const { projectId } = req.query;
+    const tasks = claudeCodeBridge.getPendingTasks(projectId);
+    res.json({ tasks });
+});
+
+// Get a specific task
+app.get('/api/bridge/tasks/:taskId', (req, res) => {
+    const task = claudeCodeBridge.getTask(req.params.taskId);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    res.json({ task });
+});
+
+// Acknowledge a task
+app.post('/api/bridge/tasks/:taskId/acknowledge', (req, res) => {
+    const result = claudeCodeBridge.acknowledgeTask(req.params.taskId);
+    res.json(result);
+});
+
+// Start a task
+app.post('/api/bridge/tasks/:taskId/start', (req, res) => {
+    const result = claudeCodeBridge.startTask(req.params.taskId);
+    res.json(result);
+});
+
+// Report progress
+app.post('/api/bridge/tasks/:taskId/progress', (req, res) => {
+    const result = claudeCodeBridge.reportProgress(req.params.taskId, req.body);
+    res.json(result);
+});
+
+// Complete a task
+app.post('/api/bridge/tasks/:taskId/complete', (req, res) => {
+    const result = claudeCodeBridge.completeTask(req.params.taskId, req.body);
+    res.json(result);
+});
+
+// Get all artifacts
+app.get('/api/bridge/artifacts', (req, res) => {
+    const { projectId, type, unused } = req.query;
+    const artifacts = claudeCodeBridge.getArtifacts(projectId, {
+        type,
+        unused: unused === 'true'
+    });
+    res.json({ artifacts });
+});
+
+// Get bridge status
+app.get('/api/bridge/status', (req, res) => {
+    res.json(claudeCodeBridge.getStatus());
+});
+
+// Get project status (for Director monitoring)
+app.get('/api/bridge/projects/:projectId/status', (req, res) => {
+    const status = claudeCodeBridge.getProjectStatus(req.params.projectId);
+    res.json(status);
 });
 
 // ==========================================
@@ -708,10 +855,35 @@ app.patch('/api/projects/:id/phase', async (req, res) => {
 // Spawn director agent for project
 app.post('/api/projects/:id/spawn-director', async (req, res) => {
   try {
-    const result = await projectService.spawnDirectorAgent(req.params.id);
-    res.json(result);
+    const { skipPlanning } = req.body || {};
+    const projectId = req.params.id;
+
+    // First, create task plan from project instructions
+    let planResult = null;
+    if (!skipPlanning) {
+      console.log(`[API] Creating task plan for project: ${projectId}`);
+      planResult = await directorEngine.createTaskPlan(projectId);
+      console.log(`[API] Task plan created: ${planResult.tasks} tasks in ${planResult.phases} phases`);
+    }
+
+    // Then optionally start the autonomous director
+    const { startAutonomous } = req.body || {};
+    let directorResult = null;
+    if (startAutonomous) {
+      directorResult = await projectService.spawnDirectorAgent(projectId);
+    }
+
+    res.json({
+      success: true,
+      plan: planResult,
+      director: directorResult,
+      message: planResult
+        ? `Created ${planResult.tasks} tasks across ${planResult.phases} phases`
+        : 'Director started without planning'
+    });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('[API] spawn-director error:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
@@ -757,6 +929,453 @@ app.delete('/api/projects/:id', async (req, res) => {
   try {
     const result = await projectService.deleteProject(req.params.id);
     res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ==========================================
+// 🔐 V8 EXECUTION AUTHORITY API ROUTES
+// ==========================================
+
+// V8: Session Resume
+app.post('/api/v8/session/resume', async (req, res) => {
+  try {
+    const summary = await stateStore.resumeSession();
+    res.json({
+      success: true,
+      summary,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Session resume failed:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      code: error.code || 'RESUME_FAILED'
+    });
+  }
+});
+
+// V8: Get Execution Violations
+app.get('/api/v8/violations', async (req, res) => {
+  try {
+    const { missionId } = req.query;
+
+    if (missionId) {
+      const violations = stateStore.getExecutionViolations(missionId);
+      res.json({ success: true, violations, count: violations.length });
+    } else {
+      const count = stateStore.getViolationCount();
+      res.json({ success: true, totalCount: count });
+    }
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// V8: Record a Violation
+app.post('/api/v8/violations/record', async (req, res) => {
+  try {
+    const { missionId, taskId, attemptedAction, attemptedBy } = req.body;
+
+    if (!missionId || !attemptedAction) {
+      return res.status(400).json({
+        success: false,
+        error: 'missionId and attemptedAction required'
+      });
+    }
+
+    const artifact = await stateStore.recordExecutionViolation({
+      missionId,
+      taskId: taskId || null,
+      attemptedAction,
+      attemptedBy: attemptedBy || 'UNKNOWN',
+      requiredAuthority: 'CLAUDE_CODE'
+    });
+
+    res.json({ success: true, artifact });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// V8: Status and Health
+app.get('/api/v8/status', async (req, res) => {
+  try {
+    const stats = stateStore.getStats();
+    const violationCount = stateStore.getViolationCount();
+
+    res.json({
+      success: true,
+      v8: {
+        enabled: true,
+        delegationEnforced: true,
+        violationCount,
+        resumeManagerReady: !!stateStore.resumeManager
+      },
+      stats,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// V8: Get Mission with Authority Context
+app.get('/api/v8/missions/:missionId/authority', async (req, res) => {
+  try {
+    const { missionId } = req.params;
+    const missionWithAuth = await stateStore.getMissionWithAuthority(missionId);
+
+    if (!missionWithAuth) {
+      return res.status(404).json({
+        success: false,
+        error: 'Mission not found'
+      });
+    }
+
+    res.json({ success: true, mission: missionWithAuth });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// V8: Create Mission with Bootstrap
+app.post('/api/v8/missions/create', async (req, res) => {
+  try {
+    const missionData = req.body;
+    const mission = await stateStore.createMissionWithBootstrap(missionData);
+
+    res.json({
+      success: true,
+      mission,
+      v8: {
+        bootstrapCreated: !!mission.bootstrapArtifactId,
+        executionAuthority: mission.executionAuthority,
+        executionMode: mission.executionMode
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// V8: Check Execution Permission
+app.post('/api/v8/check-permission', async (req, res) => {
+  try {
+    const { missionId, caller } = req.body;
+
+    if (!missionId || !caller) {
+      return res.status(400).json({
+        success: false,
+        error: 'missionId and caller required'
+      });
+    }
+
+    const result = stateStore.checkExecutionPermission(missionId, caller);
+    res.json({ success: true, ...result });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==========================================
+// 🏗️ ARCHITECTURE FIX API ROUTES
+// ==========================================
+
+const serverStartTime = Date.now();
+
+// Health Check
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    version: '1.0.0',
+    uptime: Math.floor((Date.now() - serverStartTime) / 1000),
+    timestamp: new Date().toISOString(),
+    services: {
+      stateStore: !!stateStore.isInitialized,
+      taskService: true,
+      artifactService: true,
+      projectService: true
+    }
+  });
+});
+
+// System Status
+app.get('/api/status', async (req, res) => {
+  try {
+    const tasks = taskService.getAllTasks();
+    const artifacts = artifactService.getAllArtifacts();
+    const projects = projectService.getAllProjects();
+
+    res.json({
+      projects: projects.length,
+      tasks: tasks.length,
+      artifacts: artifacts.length,
+      agents: Object.keys(stateStore.state?.agents || {}).length
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────
+// TASKS API
+// ─────────────────────────────────────────────────────────────────
+
+// Get all tasks with filters
+app.get('/api/tasks', (req, res) => {
+  try {
+    const { projectId, status, phaseIndex, taskType, limit } = req.query;
+    const tasks = taskService.getAllTasks({
+      projectId,
+      status,
+      phaseIndex: phaseIndex !== undefined ? parseInt(phaseIndex) : undefined,
+      taskType,
+      limit: limit ? parseInt(limit) : undefined
+    });
+    res.json({ tasks, total: tasks.length });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get single task with artifacts
+app.get('/api/tasks/:taskId', async (req, res) => {
+  try {
+    const task = taskService.getTask(req.params.taskId);
+    if (!task) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+    const artifacts = artifactService.getArtifactsByTask(task.id);
+    res.json({ task, artifacts });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create task
+app.post('/api/tasks', async (req, res) => {
+  try {
+    const { projectId, title, description, phaseIndex, phaseName, deps, taskType, prompt, estimatedMinutes } = req.body;
+
+    if (!projectId || !title) {
+      return res.status(400).json({ error: 'projectId and title required' });
+    }
+
+    const task = await taskService.createTask({
+      projectId,
+      title,
+      description,
+      phaseIndex,
+      phaseName,
+      deps,
+      taskType,
+      prompt,
+      estimatedMinutes
+    });
+
+    res.json({ success: true, task });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update task
+app.patch('/api/tasks/:taskId', async (req, res) => {
+  try {
+    const task = await taskService.updateTask(req.params.taskId, req.body);
+    res.json({ success: true, task });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Execute task (send to Claude Code)
+app.post('/api/tasks/:taskId/execute', async (req, res) => {
+  try {
+    const task = await taskService.executeTask(req.params.taskId);
+    res.json({
+      success: true,
+      task,
+      claudeCodeTaskId: task.claudeCodeTaskId,
+      status: task.status
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Complete task
+app.post('/api/tasks/:taskId/complete', async (req, res) => {
+  try {
+    const task = await taskService.completeTask(req.params.taskId, req.body);
+    res.json({ success: true, task });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Fail task
+app.post('/api/tasks/:taskId/fail', async (req, res) => {
+  try {
+    const { error: errorMessage } = req.body;
+    const task = await taskService.failTask(req.params.taskId, errorMessage);
+    res.json({ success: true, task });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get task artifacts
+app.get('/api/tasks/:taskId/artifacts', (req, res) => {
+  try {
+    const artifacts = artifactService.getArtifactsByTask(req.params.taskId);
+    res.json({ artifacts });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────
+// ARTIFACTS API
+// ─────────────────────────────────────────────────────────────────
+
+// Get all artifacts with filters
+app.get('/api/artifacts', (req, res) => {
+  try {
+    const { projectId, taskId, type, limit } = req.query;
+    const artifacts = artifactService.getAllArtifacts({
+      projectId,
+      taskId,
+      type,
+      limit: limit ? parseInt(limit) : undefined
+    });
+    res.json({ artifacts, total: artifacts.length });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get single artifact with content
+app.get('/api/artifacts/:artifactId', async (req, res) => {
+  try {
+    const artifact = artifactService.getArtifact(req.params.artifactId);
+    if (!artifact) {
+      return res.status(404).json({ error: 'Artifact not found' });
+    }
+    const content = await artifactService.getArtifactContent(artifact.id);
+    res.json({ artifact, content });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create artifact
+app.post('/api/artifacts', async (req, res) => {
+  try {
+    const { projectId, taskId, type, label, content, payload, contentType, provenance } = req.body;
+
+    if (!projectId || !type || !label) {
+      return res.status(400).json({ error: 'projectId, type, and label required' });
+    }
+
+    const artifact = await artifactService.createArtifact({
+      projectId,
+      taskId,
+      type,
+      label,
+      content,
+      payload,
+      contentType,
+      provenance
+    });
+
+    res.json({ success: true, artifact });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get artifact preview
+app.get('/api/artifacts/:artifactId/preview', async (req, res) => {
+  try {
+    const artifact = artifactService.getArtifact(req.params.artifactId);
+    if (!artifact) {
+      return res.status(404).json({ error: 'Artifact not found' });
+    }
+
+    if (!artifact.previewable) {
+      return res.status(400).json({ error: 'Artifact is not previewable' });
+    }
+
+    // Return preview HTML
+    res.type('html').send(artifact.previewHtml || '<p>No preview available</p>');
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get artifact content (full content)
+app.get('/api/artifacts/:artifactId/content', async (req, res) => {
+  try {
+    const artifact = artifactService.getArtifact(req.params.artifactId);
+    if (!artifact) {
+      return res.status(404).json({ error: 'Artifact not found' });
+    }
+
+    const content = await artifactService.getArtifactContent(req.params.artifactId);
+    res.json({ content, contentType: artifact.contentType });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete artifact
+app.delete('/api/artifacts/:artifactId', async (req, res) => {
+  try {
+    const result = await artifactService.deleteArtifact(req.params.artifactId);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────
+// PROJECT TREE API
+// ─────────────────────────────────────────────────────────────────
+
+// Get project with full tree (phases → tasks → artifacts)
+app.get('/api/projects/:id/tree', async (req, res) => {
+  try {
+    const tree = await projectService.getProjectWithTree(req.params.id);
+    if (!tree) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+    res.json(tree);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get project tasks grouped by phase
+app.get('/api/projects/:id/tasks', (req, res) => {
+  try {
+    const phases = taskService.getTasksByPhaseGrouped(req.params.id);
+    const stats = taskService.getProjectTaskStats(req.params.id);
+    res.json({ phases, stats });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get project artifacts
+app.get('/api/projects/:id/artifacts', (req, res) => {
+  try {
+    const artifacts = artifactService.getArtifactsByProject(req.params.id);
+    const stats = artifactService.getProjectArtifactStats(req.params.id);
+    res.json({ artifacts, stats });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

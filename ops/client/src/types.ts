@@ -194,3 +194,100 @@ export interface NewProjectData {
   instructions: string;
   directorModel: string;
 }
+
+// ============================================
+// TASK TYPES (Architecture Fix)
+// ============================================
+
+export type TaskStatus =
+  | 'pending'
+  | 'ready'
+  | 'queued'
+  | 'running'
+  | 'complete'
+  | 'failed'
+  | 'blocked';
+
+export interface Task {
+  id: string;
+  projectId: string;
+  phaseIndex: number;
+  phaseLabel: string;
+  title: string;
+  instructions: string;
+  status: TaskStatus;
+  dependencies: string[];
+  deps?: string[];
+  artifactIds: string[];
+  assignedTo: string | null;
+  executionLog: string[];
+  result: any;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  _stateVersion: number;
+}
+
+// ============================================
+// ARTIFACT TYPES (Architecture Fix)
+// ============================================
+
+export type ArtifactContentType =
+  | 'json'
+  | 'markdown'
+  | 'html'
+  | 'svg'
+  | 'image'
+  | 'code'
+  | 'text';
+
+export interface Artifact {
+  id: string;
+  projectId: string;
+  taskId: string | null;
+  phaseIndex: number;
+  type: string;
+  label: string;
+  contentType: ArtifactContentType;
+  payload: any;
+  filePath: string | null;
+  fileSize: number | null;
+  previewable: boolean;
+  previewHtml: string | null;
+  provenance: {
+    producer: string;
+    agentId: string | null;
+    model: string | null;
+    promptTokens: number | null;
+    completionTokens: number | null;
+    cost: number | null;
+  };
+  createdAt: string;
+  _stateVersion: number;
+}
+
+// ============================================
+// PROJECT TREE TYPES (Architecture Fix)
+// ============================================
+
+export interface PhaseData {
+  index: number;
+  label: string;
+  tasks: Task[];
+  artifacts: Artifact[];
+}
+
+export interface ProjectTree {
+  id: string;
+  name: string;
+  description?: string;
+  instructions: string;
+  status: ProjectStatus;
+  phase: ProjectPhase;
+  directorModel: string;
+  taskIds: string[];
+  artifactIds: string[];
+  phases: PhaseData[];
+  createdAt: string;
+  updatedAt: string;
+}

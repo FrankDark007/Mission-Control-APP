@@ -24,11 +24,12 @@ export class PerplexityIntegration {
             throw new Error('Perplexity API key not configured. Set PERPLEXITY_API_KEY in .env');
         }
 
+        // Updated 2025 Perplexity Sonar models
         const modelMap = {
-            web: 'llama-3.1-sonar-large-128k-online',
-            academic: 'llama-3.1-sonar-large-128k-online',
-            news: 'llama-3.1-sonar-large-128k-online',
-            reddit: 'llama-3.1-sonar-large-128k-online'
+            web: 'sonar',
+            academic: 'sonar-pro',
+            news: 'sonar',
+            reddit: 'sonar'
         };
 
         try {

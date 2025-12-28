@@ -1,31 +1,137 @@
 
-import React, { useMemo, useState } from 'react';
-import { Clock, Zap, CheckCircle, AlertCircle, Bot, Layers, ArrowRight, Link, GitCommit } from 'lucide-react';
+import React, { useMemo, useState, useEffect } from 'react';
+import { Clock, Zap, CheckCircle, AlertCircle, Bot, Layers, ArrowRight, Link, GitCommit, Brain, Package } from 'lucide-react';
 import { QueueResponse, TaskDefinition } from '../types';
+
+interface BridgeTask {
+    id: string;
+    projectId: string;
+    title: string;
+    instructions: string;
+    priority: string;
+    status: string;
+    createdBy: string;
+    createdByModel: string;
+    createdAt: string;
+    progress: number;
+    artifacts: string[];
+}
+
+interface BridgeArtifact {
+    id: string;
+    projectId: string;
+    type: string;
+    name: string;
+    description: string;
+    createdBy: string;
+    createdAt: string;
+}
 
 interface MissionTimelineProps {
     queue: QueueResponse;
 }
 
 const MissionTimeline: React.FC<MissionTimelineProps> = ({ queue }) => {
-    const [hoveredTaskId, setHoveredTaskId] = useState<number | null>(null);
+    const [hoveredTaskId, setHoveredTaskId] = useState<string | number | null>(null);
+    const [bridgeTasks, setBridgeTasks] = useState<BridgeTask[]>([]);
+    const [bridgeArtifacts, setBridgeArtifacts] = useState<BridgeArtifact[]>([]);
+    const [activeTab, setActiveTab] = useState<'all' | 'queue' | 'director' | 'artifacts'>('all');
 
-    const allTasks = useMemo(() => {
+    // Fetch Claude Code Bridge data
+    useEffect(() => {
+        const fetchBridgeData = async () => {
+            try {
+                const [tasksRes, artifactsRes] = await Promise.all([
+                    fetch('/api/bridge/tasks'),
+                    fetch('/api/bridge/artifacts')
+                ]);
+                const tasksData = await tasksRes.json();
+                const artifactsData = await artifactsRes.json();
+                setBridgeTasks(tasksData.tasks || []);
+                setBridgeArtifacts(artifactsData.artifacts || []);
+            } catch (e) {
+                console.error('Failed to fetch bridge data:', e);
+            }
+        };
+
+        fetchBridgeData();
+        const interval = setInterval(fetchBridgeData, 5000); // Poll every 5 seconds
+        return () => clearInterval(interval);
+    }, []);
+
+    const queueTasks = useMemo(() => {
         const history = [...queue.history].sort((a, b) => new Date(b.created || 0).getTime() - new Date(a.created || 0).getTime());
-        return [...queue.activeTasks, ...history].slice(0, 20);
+        return [...queue.activeTasks, ...history].slice(0, 20).map(t => ({
+            ...t,
+            source: 'queue' as const
+        }));
     }, [queue.activeTasks, queue.history]);
 
-    const getRelationship = (taskId: number) => {
+    const directorTasks = useMemo(() => {
+        return bridgeTasks.map(t => ({
+            id: t.id,
+            name: t.title,
+            type: 'director',
+            status: t.status === 'pending' ? 'pending' : t.status === 'in_progress' ? 'processing' : t.status,
+            created: t.createdAt,
+            agentId: t.createdBy,
+            progress: t.progress,
+            source: 'director' as const,
+            priority: t.priority,
+            projectId: t.projectId
+        }));
+    }, [bridgeTasks]);
+
+    const allItems = useMemo(() => {
+        let items: any[] = [];
+
+        if (activeTab === 'all' || activeTab === 'queue') {
+            items = [...items, ...queueTasks];
+        }
+        if (activeTab === 'all' || activeTab === 'director') {
+            items = [...items, ...directorTasks];
+        }
+        if (activeTab === 'artifacts') {
+            items = bridgeArtifacts.map(a => ({
+                id: a.id,
+                name: a.name,
+                type: a.type,
+                status: 'artifact',
+                created: a.createdAt,
+                agentId: a.createdBy,
+                source: 'artifact' as const,
+                description: a.description
+            }));
+        }
+
+        return items.sort((a, b) => new Date(b.created || 0).getTime() - new Date(a.created || 0).getTime()).slice(0, 30);
+    }, [queueTasks, directorTasks, bridgeArtifacts, activeTab]);
+
+    const getRelationship = (taskId: string | number) => {
         if (!hoveredTaskId) return 'none';
         if (taskId === hoveredTaskId) return 'current';
-
-        const hoveredTask = allTasks.find(t => t.id === hoveredTaskId);
-        const currentTask = allTasks.find(t => t.id === taskId);
-
-        if (hoveredTask?.dependencies?.includes(taskId)) return 'dependency';
-        if (currentTask?.dependencies?.includes(hoveredTaskId)) return 'dependent';
-
         return 'unrelated';
+    };
+
+    const getStatusColor = (status: string, source: string) => {
+        if (source === 'artifact') return 'bg-purple-500/20 border-purple-500 text-purple-400';
+        if (source === 'director') {
+            if (status === 'pending') return 'bg-google-yellow/20 border-google-yellow text-google-yellow';
+            if (status === 'processing' || status === 'in_progress') return 'bg-google-blue/20 border-google-blue text-google-blue';
+            if (status === 'completed') return 'bg-google-green/10 border-google-green/30 text-google-green';
+            return 'bg-google-red/10 border-google-red/30 text-google-red';
+        }
+        if (status === 'processing') return 'bg-google-blue/20 border-google-blue text-google-blue';
+        if (status === 'completed') return 'bg-google-green/10 border-google-green/30 text-google-green';
+        return 'bg-google-red/10 border-google-red/30 text-google-red';
+    };
+
+    const getStatusIcon = (status: string, source: string) => {
+        if (source === 'artifact') return <Package size={16} className="md:w-[18px] md:h-[18px]" />;
+        if (source === 'director') return <Brain size={16} className="md:w-[18px] md:h-[18px]" />;
+        if (status === 'processing') return <Zap size={16} className="md:w-[18px] md:h-[18px] animate-pulse" />;
+        if (status === 'completed') return <CheckCircle size={16} className="md:w-[18px] md:h-[18px]" />;
+        return <AlertCircle size={16} className="md:w-[18px] md:h-[18px]" />;
     };
 
     return (
@@ -44,18 +150,45 @@ const MissionTimeline: React.FC<MissionTimelineProps> = ({ queue }) => {
                         <p className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500">Real-time Mission Sequencing Archive</p>
                     </div>
                 </div>
-                <div className="flex gap-4">
+                <div className="flex gap-2 flex-wrap">
                     <div className="flex items-center gap-2 bg-dark-900 px-3 md:px-4 py-2 rounded-lg md:rounded-xl border border-dark-700">
                         <div className="w-2 h-2 rounded-full bg-google-green animate-pulse" />
                         <span className="text-[9px] font-black uppercase text-gray-500">Sync Active</span>
                     </div>
+                    <div className="flex items-center gap-1 bg-dark-900 px-2 py-1 rounded-lg border border-dark-700">
+                        <span className="text-[9px] font-black text-google-blue">{directorTasks.length}</span>
+                        <Brain size={10} className="text-google-blue" />
+                    </div>
+                    <div className="flex items-center gap-1 bg-dark-900 px-2 py-1 rounded-lg border border-dark-700">
+                        <span className="text-[9px] font-black text-purple-400">{bridgeArtifacts.length}</span>
+                        <Package size={10} className="text-purple-400" />
+                    </div>
                 </div>
             </div>
 
+            {/* Tab Filters */}
+            <div className="flex gap-2 flex-wrap">
+                {(['all', 'queue', 'director', 'artifacts'] as const).map(tab => (
+                    <button
+                        key={tab}
+                        onClick={() => setActiveTab(tab)}
+                        className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase transition-all ${
+                            activeTab === tab
+                                ? 'bg-google-blue text-white'
+                                : 'bg-dark-900 text-gray-500 hover:text-white border border-dark-700'
+                        }`}
+                    >
+                        {tab === 'all' ? 'All Activity' :
+                         tab === 'queue' ? 'Queue Tasks' :
+                         tab === 'director' ? 'Director Tasks' : 'Artifacts'}
+                    </button>
+                ))}
+            </div>
+
             <div className="space-y-4 relative z-10">
-                {allTasks.map((task, i) => {
+                {allItems.map((task, i) => {
                     const relation = getRelationship(task.id);
-                    const isProcessing = task.status === 'processing';
+                    const isProcessing = task.status === 'processing' || task.status === 'in_progress';
 
                     return (
                         <div
@@ -69,57 +202,48 @@ const MissionTimeline: React.FC<MissionTimelineProps> = ({ queue }) => {
                             <div className={`
                                 flex gap-4 md:gap-6 p-4 md:p-6 rounded-2xl md:rounded-[2.5rem] border transition-all relative overflow-hidden
                                 ${relation === 'current' ? 'bg-dark-800 border-white/20 shadow-2xl scale-[1.02]' :
-                                  relation === 'dependency' ? 'bg-google-yellow/5 border-google-yellow/50 shadow-[0_0_15px_rgba(251,188,4,0.1)]' :
-                                  relation === 'dependent' ? 'bg-google-blue/5 border-google-blue/50 shadow-[0_0_15px_rgba(26,115,232,0.1)]' :
+                                  task.source === 'director' ? 'bg-google-blue/5 border-google-blue/20' :
+                                  task.source === 'artifact' ? 'bg-purple-500/5 border-purple-500/20' :
                                   'bg-dark-900/40 border-dark-700 hover:border-dark-600'}
                             `}>
                                 <div className="flex flex-col items-center shrink-0 pt-2 relative">
-                                    {relation === 'dependency' && (
-                                        <div className="absolute -left-8 md:-left-10 top-1/2 -translate-y-1/2 p-1.5 md:p-2 bg-dark-900 border border-google-yellow rounded-full text-google-yellow shadow-xl z-20 animate-in slide-in-from-right-2">
-                                            <ArrowRight size={12} className="-rotate-90" />
-                                        </div>
-                                    )}
-                                    {relation === 'dependent' && (
-                                        <div className="absolute -left-8 md:-left-10 top-1/2 -translate-y-1/2 p-1.5 md:p-2 bg-dark-900 border border-google-blue rounded-full text-google-blue shadow-xl z-20 animate-in slide-in-from-right-2">
-                                            <ArrowRight size={12} className="rotate-90" />
-                                        </div>
-                                    )}
-
-                                    <div className={`p-2.5 md:p-3 rounded-xl md:rounded-2xl border shadow-lg transition-all ${
-                                        task.status === 'processing' ? 'bg-google-blue/20 border-google-blue text-google-blue' :
-                                        task.status === 'completed' ? 'bg-google-green/10 border-google-green/30 text-google-green' :
-                                        'bg-google-red/10 border-google-red/30 text-google-red'
-                                    }`}>
-                                        {task.status === 'processing' ? <Zap size={16} className="md:w-[18px] md:h-[18px] animate-pulse" /> :
-                                         task.status === 'completed' ? <CheckCircle size={16} className="md:w-[18px] md:h-[18px]" /> :
-                                         <AlertCircle size={16} className="md:w-[18px] md:h-[18px]" />}
+                                    <div className={`p-2.5 md:p-3 rounded-xl md:rounded-2xl border shadow-lg transition-all ${getStatusColor(task.status, task.source)}`}>
+                                        {getStatusIcon(task.status, task.source)}
                                     </div>
 
-                                    {i < allTasks.length - 1 && (
+                                    {i < allItems.length - 1 && (
                                         <div className="w-px flex-1 bg-dark-700 my-2 border-l border-dashed border-gray-700 opacity-30 group-hover:opacity-50 transition-opacity" />
                                     )}
                                 </div>
 
                                 <div className="flex-1 space-y-3 relative z-10">
                                     <div className="flex flex-col sm:flex-row justify-between items-start gap-2">
-                                        <div>
-                                            {relation === 'dependency' && (
-                                                <div className="text-[9px] font-black uppercase text-google-yellow mb-1 animate-pulse flex items-center gap-1">
-                                                    <Link size={10} /> Prerequisite for Selection
+                                        <div className="flex-1">
+                                            {task.source === 'director' && (
+                                                <div className="text-[9px] font-black uppercase text-google-blue mb-1 flex items-center gap-1">
+                                                    <Brain size={10} /> Director Task
                                                 </div>
                                             )}
-                                            {relation === 'dependent' && (
-                                                <div className="text-[9px] font-black uppercase text-google-blue mb-1 animate-pulse flex items-center gap-1">
-                                                    <Link size={10} /> Dependent on Selection
+                                            {task.source === 'artifact' && (
+                                                <div className="text-[9px] font-black uppercase text-purple-400 mb-1 flex items-center gap-1">
+                                                    <Package size={10} /> Generated Artifact
                                                 </div>
                                             )}
 
-                                            <h4 className="text-sm font-bold text-white leading-tight">{task.name}</h4>
+                                            <h4 className="text-sm font-bold text-white leading-tight">{task.name || 'Unnamed Task'}</h4>
+                                            {task.description && (
+                                                <p className="text-[10px] text-gray-500 mt-1 line-clamp-2">{task.description}</p>
+                                            )}
                                             <div className="flex items-center gap-2 mt-1 flex-wrap">
-                                                <span className="text-[9px] font-mono text-gray-500">#{task.id}</span>
+                                                <span className="text-[9px] font-mono text-gray-500">#{typeof task.id === 'string' ? task.id.slice(-8) : task.id}</span>
                                                 {task.agentId && (
                                                     <span className="flex items-center gap-1 text-[9px] font-black uppercase text-google-blue bg-google-blue/5 px-2 py-0.5 rounded">
                                                         <Bot size={10} /> {task.agentId}
+                                                    </span>
+                                                )}
+                                                {task.projectId && (
+                                                    <span className="text-[9px] font-mono text-gray-600 bg-dark-800 px-2 py-0.5 rounded">
+                                                        {task.projectId}
                                                     </span>
                                                 )}
                                             </div>
@@ -128,7 +252,10 @@ const MissionTimeline: React.FC<MissionTimelineProps> = ({ queue }) => {
                                             <div className="text-[9px] font-black uppercase text-gray-600">Status</div>
                                             <div className={`text-[10px] font-black uppercase tracking-widest ${
                                                 task.status === 'completed' ? 'text-google-green' :
-                                                task.status === 'processing' ? 'text-google-blue' : 'text-google-red'
+                                                task.status === 'processing' || task.status === 'in_progress' ? 'text-google-blue' :
+                                                task.status === 'pending' ? 'text-google-yellow' :
+                                                task.status === 'artifact' ? 'text-purple-400' :
+                                                'text-google-red'
                                             }`}>
                                                 {task.status}
                                             </div>
@@ -139,26 +266,20 @@ const MissionTimeline: React.FC<MissionTimelineProps> = ({ queue }) => {
                                     </div>
 
                                     <div className="flex items-center gap-3 md:gap-4 flex-wrap">
-                                        <div className="px-2 py-1 bg-dark-800 rounded border border-dark-700 text-[9px] font-black uppercase text-gray-500">
-                                            {task.type}
+                                        <div className={`px-2 py-1 rounded border text-[9px] font-black uppercase ${
+                                            task.source === 'director' ? 'bg-google-blue/10 border-google-blue/30 text-google-blue' :
+                                            task.source === 'artifact' ? 'bg-purple-500/10 border-purple-500/30 text-purple-400' :
+                                            'bg-dark-800 border-dark-700 text-gray-500'
+                                        }`}>
+                                            {task.type || task.source}
                                         </div>
-                                        {task.dependencies && task.dependencies.length > 0 && (
-                                            <div className="flex items-center gap-2 flex-wrap">
-                                                <span className="text-[8px] font-black uppercase text-gray-600 flex items-center gap-1">
-                                                    <GitCommit size={8} /> Refs:
-                                                </span>
-                                                {task.dependencies.map(dep => (
-                                                    <span
-                                                        key={dep}
-                                                        className={`text-[9px] font-mono px-1.5 py-0.5 rounded border transition-colors ${
-                                                            hoveredTaskId === dep
-                                                                ? 'bg-google-yellow/20 text-google-yellow border-google-yellow/50'
-                                                                : 'bg-dark-800 text-gray-500 border-dark-700'
-                                                        }`}
-                                                    >
-                                                        #{dep}
-                                                    </span>
-                                                ))}
+                                        {task.priority && task.priority !== 'normal' && (
+                                            <div className={`px-2 py-1 rounded text-[9px] font-black uppercase ${
+                                                task.priority === 'critical' ? 'bg-google-red/20 text-google-red' :
+                                                task.priority === 'high' ? 'bg-google-yellow/20 text-google-yellow' :
+                                                'bg-dark-800 text-gray-500'
+                                            }`}>
+                                                {task.priority}
                                             </div>
                                         )}
                                     </div>
@@ -178,7 +299,7 @@ const MissionTimeline: React.FC<MissionTimelineProps> = ({ queue }) => {
                                             </div>
                                             <svg width="100%" height="6" className="rounded-full bg-dark-800 overflow-hidden">
                                                 <rect width="100%" height="100%" fill="#1f2937" />
-                                                <rect width="40%" height="100%" fill="#1a73e8" rx="3">
+                                                <rect width={`${task.progress || 40}%`} height="100%" fill="#1a73e8" rx="3">
                                                     <animate attributeName="x" from="-40%" to="100%" dur="0.8s" repeatCount="indefinite" />
                                                     <animate attributeName="opacity" values="0.5;1;0.5" dur="0.8s" repeatCount="indefinite" />
                                                 </rect>
@@ -191,7 +312,7 @@ const MissionTimeline: React.FC<MissionTimelineProps> = ({ queue }) => {
                     );
                 })}
 
-                {allTasks.length === 0 && (
+                {allItems.length === 0 && (
                     <div className="py-12 md:py-20 flex flex-col items-center justify-center text-center opacity-10 space-y-4">
                         <Layers className="w-12 h-12 md:w-16 md:h-16" />
                         <p className="text-xs md:text-sm font-black uppercase tracking-widest">Temporal Log Empty</p>

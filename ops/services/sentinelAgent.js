@@ -112,9 +112,13 @@ class SentinelAgent {
     // Start the watch loop
     this._startWatchLoop(watchId);
 
-    this._emit('sentinel-watch-created', { watch });
+    // Create sanitized copy without intervalId for serialization
+    const sanitizedWatch = { ...watch };
+    delete sanitizedWatch.intervalId;
 
-    return { success: true, watch };
+    this._emit('sentinel-watch-created', { watch: sanitizedWatch });
+
+    return { success: true, watch: sanitizedWatch };
   }
 
   /**
@@ -447,17 +451,28 @@ After making changes, the Sentinel will automatically re-check and report progre
   }
 
   /**
+   * Sanitize watch for JSON serialization (removes intervalId)
+   */
+  _sanitizeWatch(watch) {
+    if (!watch) return null;
+    const sanitized = { ...watch };
+    delete sanitized.intervalId;
+    return sanitized;
+  }
+
+  /**
    * Get watch status
    */
   getWatch(watchId) {
-    return this.activeWatches.get(watchId) || null;
+    const watch = this.activeWatches.get(watchId);
+    return this._sanitizeWatch(watch);
   }
 
   /**
    * Get all watches
    */
   getAllWatches() {
-    return Array.from(this.activeWatches.values());
+    return Array.from(this.activeWatches.values()).map(w => this._sanitizeWatch(w));
   }
 
   /**
@@ -488,7 +503,12 @@ After making changes, the Sentinel will automatically re-check and report progre
    */
   _emit(event, data) {
     if (this.io) {
-      this.io.emit(event, data);
+      // Sanitize data to avoid circular references (intervalId is a Timer object)
+      const sanitized = JSON.parse(JSON.stringify(data, (key, value) => {
+        if (key === 'intervalId') return undefined;
+        return value;
+      }));
+      this.io.emit(event, sanitized);
     }
   }
 }

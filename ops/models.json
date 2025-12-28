@@ -1,11 +1,25 @@
 
 [
   {
-    "id": "gpt-5.2",
-    "name": "Chat GPT 5.2 Beta",
-    "provider": "openai",
-    "apiModelId": "gpt-5.2-preview",
-    "apiKeyEnv": "OPENAI_API_KEY"
+    "id": "claude-opus",
+    "name": "Claude Opus 4",
+    "provider": "anthropic",
+    "apiModelId": "claude-opus-4-20250514",
+    "apiKeyEnv": "ANTHROPIC_API_KEY"
+  },
+  {
+    "id": "claude-sonnet",
+    "name": "Claude Sonnet 4",
+    "provider": "anthropic",
+    "apiModelId": "claude-sonnet-4-20250514",
+    "apiKeyEnv": "ANTHROPIC_API_KEY"
+  },
+  {
+    "id": "claude-haiku",
+    "name": "Claude Haiku 3.5",
+    "provider": "anthropic",
+    "apiModelId": "claude-3-5-haiku-20241022",
+    "apiKeyEnv": "ANTHROPIC_API_KEY"
   },
   {
     "id": "gpt-4o",
@@ -15,15 +29,53 @@
     "apiKeyEnv": "OPENAI_API_KEY"
   },
   {
-    "id": "gemini-3-pro",
-    "name": "Gemini 3 Pro",
+    "id": "gpt-4o-mini",
+    "name": "GPT-4o Mini",
+    "provider": "openai",
+    "apiModelId": "gpt-4o-mini",
+    "apiKeyEnv": "OPENAI_API_KEY"
+  },
+  {
+    "id": "gemini-2-flash",
+    "name": "Gemini 2.0 Flash",
     "provider": "google",
-    "apiModelId": "gemini-3-pro-preview",
+    "apiModelId": "gemini-2.0-flash",
     "apiKeyEnv": "API_KEY"
   },
   {
+    "id": "gemini-2-pro",
+    "name": "Gemini 2.0 Pro",
+    "provider": "google",
+    "apiModelId": "gemini-2.0-pro-exp",
+    "apiKeyEnv": "API_KEY"
+  },
+  {
+    "id": "groq-llama",
+    "name": "Llama 3.3 70B (Groq)",
+    "provider": "openai-compatible",
+    "apiModelId": "llama-3.3-70b-versatile",
+    "baseUrl": "https://api.groq.com/openai/v1",
+    "apiKeyEnv": "GROQ_API_KEY"
+  },
+  {
+    "id": "groq-mixtral",
+    "name": "Mixtral 8x7B (Groq)",
+    "provider": "openai-compatible",
+    "apiModelId": "mixtral-8x7b-32768",
+    "baseUrl": "https://api.groq.com/openai/v1",
+    "apiKeyEnv": "GROQ_API_KEY"
+  },
+  {
+    "id": "mistral-large",
+    "name": "Mistral Large",
+    "provider": "openai-compatible",
+    "apiModelId": "mistral-large-latest",
+    "baseUrl": "https://api.mistral.ai/v1",
+    "apiKeyEnv": "MISTRAL_API_KEY"
+  },
+  {
     "id": "deepseek",
-    "name": "DeepSeek",
+    "name": "DeepSeek V3",
     "provider": "openai-compatible",
     "apiModelId": "deepseek-chat",
     "baseUrl": "https://api.deepseek.com",

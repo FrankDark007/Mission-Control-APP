@@ -7,6 +7,7 @@
 import { Router } from 'express';
 import { EventEmitter } from 'events';
 import { sessionManager } from './tools/sessionManager.js';
+import { DelegationGate } from './delegationGate.js';
 
 export class MCPServer extends EventEmitter {
     constructor(dependencies) {
@@ -15,9 +16,26 @@ export class MCPServer extends EventEmitter {
         this.tools = new Map();
         this.sessions = new Map();
         this.router = Router();
-        
+
+        // V8: Delegation gate for execution authority
+        this.delegationGate = null;
+        this.v8Enabled = true;
+
         this._registerCoreTools();
         this._setupRoutes();
+    }
+
+    // V8: Initialize delegation gate with state store
+    initV8(stateStore) {
+        if (!stateStore) {
+            console.warn('⚠️ V8: No stateStore provided, delegation gate disabled');
+            this.v8Enabled = false;
+            return;
+        }
+
+        this.delegationGate = new DelegationGate(stateStore);
+        this.deps.stateStore = stateStore;
+        console.log('✅ V8 Delegation Gate initialized');
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -442,6 +460,15 @@ ${params.includeSchema ? '6. FAQ section with schema markup' : ''}`;
                 inputSchema: t.schema.inputSchema
             }));
             res.json({ tools });
+        });
+
+        // V8: Status endpoint
+        this.router.get('/v8/status', (req, res) => {
+            res.json({
+                v8Enabled: this.v8Enabled,
+                delegationGateActive: !!this.delegationGate,
+                violationCount: this.delegationGate?.getViolationCount() || 0
+            });
         });
     }
 

@@ -21,7 +21,8 @@ import {
   createArtifactObject,
   ArtifactErrorCode
 } from './validators/artifactValidator.js';
-import { ArtifactTypes, ArtifactModes, getDefaultArtifactMode } from './ArtifactTypes.js';
+import { ArtifactTypes, ArtifactModes, getDefaultArtifactMode, createBootstrapPayload, createViolationPayload } from './ArtifactTypes.js';
+import { SessionResumeManager } from './resumeSession.js';
 
 // V8 Compatibility: Aliases for V7 functions
 const validateCompletionGate = validateCompletion;
@@ -63,6 +64,10 @@ class StateStore {
     this.isInitialized = false;
     this.armedMode = false;
     this.riskThreshold = 'medium';
+
+    // V8: Execution authority tracking
+    this.resumeManager = null;
+    this.executionViolations = [];
   }
 
   async init() {
@@ -70,7 +75,11 @@ class StateStore {
     await this._ensureDirs();
     await this._load();
     this.isInitialized = true;
+
+    // V8: Initialize resume manager
+    this.resumeManager = new SessionResumeManager(this);
     console.log('✅ StateStore initialized with Phase 2 contract enforcement');
+    console.log('✅ V8 Resume Manager initialized');
   }
 
   async _ensureDirs() {
@@ -181,25 +190,40 @@ class StateStore {
       throw new StateError('Mission requires id', MissionErrorCode.VALIDATION_ERROR);
     }
 
+    // Apply defaults for required contract fields before validation
+    const missionWithDefaults = {
+      ...missionData,
+      requiredArtifacts: missionData.requiredArtifacts || [],
+      verification: missionData.verification || { checks: [] },
+      riskLevel: missionData.riskLevel || 'low',
+      completionGate: missionData.completionGate || 'artifacts',
+      executionAuthority: missionData.executionAuthority || 'CLAUDE_CODE',
+      executionMode: missionData.executionMode || 'RECIPE_ONLY',
+      contract: {
+        ...(missionData.contract || {}),
+        allowedTools: missionData.contract?.allowedTools || []
+      }
+    };
+
     // Validate contract
-    const validation = validateMissionContract(missionData);
+    const validation = validateMissionContract(missionWithDefaults);
     if (!validation.valid) {
       throw new StateError(validation.errors.join('; '), validation.code);
     }
 
     // Apply default tool permissions based on missionClass
-    const missionClass = missionData.missionClass || MissionClass.IMPLEMENTATION;
-    if (!missionData.contract.allowedTools || missionData.contract.allowedTools.length === 0) {
-      missionData.contract.allowedTools = [...(DefaultToolPermissions[missionClass] || [])];
+    const missionClass = missionWithDefaults.missionClass || MissionClass.IMPLEMENTATION;
+    if (!missionWithDefaults.contract.allowedTools || missionWithDefaults.contract.allowedTools.length === 0) {
+      missionWithDefaults.contract.allowedTools = [...(DefaultToolPermissions[missionClass] || [])];
     }
 
     const now = new Date().toISOString();
     const mission = {
-      ...missionData,
-      status: missionData.status || MissionStatus.QUEUED,
-      taskIds: missionData.taskIds || [],
-      artifactIds: missionData.artifactIds || [],
-      agentIds: missionData.agentIds || [],
+      ...missionWithDefaults,
+      status: missionWithDefaults.status || MissionStatus.QUEUED,
+      taskIds: missionWithDefaults.taskIds || [],
+      artifactIds: missionWithDefaults.artifactIds || [],
+      agentIds: missionWithDefaults.agentIds || [],
       failureCount: 0,
       immediateExecCount: 0,
       createdAt: now,
@@ -821,6 +845,159 @@ class StateStore {
       counts[value] = (counts[value] || 0) + 1;
     }
     return counts;
+  }
+
+  // ============================================
+  // V8: EXECUTION AUTHORITY METHODS
+  // ============================================
+
+  /**
+   * V8: Create mission with bootstrap artifact
+   */
+  async createMissionWithBootstrap(missionData) {
+    const missionWithDefaults = {
+      ...missionData,
+      executionAuthority: missionData.executionAuthority || 'CLAUDE_CODE',
+      executionMode: missionData.executionMode || 'RECIPE_ONLY'
+    };
+
+    const mission = await this.createMission(missionWithDefaults);
+
+    const bootstrapPayload = createBootstrapPayload(mission);
+    const bootstrapArtifact = await this.addArtifact({
+      id: `artifact-${Date.now()}-boot`,
+      missionId: mission.id,
+      taskId: null,
+      type: 'mission_bootstrap',
+      label: `Bootstrap: ${mission.name}`,
+      payload: bootstrapPayload,
+      provenance: {
+        producer: 'system',
+        agentId: null,
+        worktree: null,
+        commitHash: null
+      }
+    });
+
+    await this.updateMission(mission.id, {
+      bootstrapArtifactId: bootstrapArtifact.id
+    });
+
+    return {
+      ...mission,
+      bootstrapArtifactId: bootstrapArtifact.id
+    };
+  }
+
+  /**
+   * V8: Record an execution violation
+   */
+  async recordExecutionViolation(violation) {
+    const payload = createViolationPayload(violation);
+
+    const artifact = await this.addArtifact({
+      id: `artifact-${Date.now()}-viol`,
+      missionId: violation.missionId,
+      taskId: violation.taskId || null,
+      type: 'execution_violation',
+      label: `Violation: ${violation.attemptedAction}`,
+      payload,
+      provenance: {
+        producer: 'system',
+        agentId: null,
+        worktree: null,
+        commitHash: null
+      }
+    });
+
+    this.executionViolations.push({
+      id: artifact.id,
+      missionId: violation.missionId,
+      timestamp: new Date().toISOString()
+    });
+
+    if (violation.taskId && violation.blockTask !== false) {
+      await this.updateTask(violation.taskId, {
+        status: 'blocked',
+        blockedReason: `EXECUTION_VIOLATION: ${violation.attemptedAction}`
+      });
+    }
+
+    await this._audit('execution.violation', {
+      artifactId: artifact.id,
+      action: violation.attemptedAction
+    });
+
+    return artifact;
+  }
+
+  /**
+   * V8: Resume session after disconnect/crash
+   */
+  async resumeSession() {
+    if (!this.resumeManager) {
+      throw new StateError('Resume manager not initialized', 'NOT_INITIALIZED');
+    }
+    return this.resumeManager.resumeSession();
+  }
+
+  /**
+   * V8: Get mission with execution authority context
+   */
+  async getMissionWithAuthority(missionId) {
+    const mission = this.getMission(missionId);
+    if (!mission) return null;
+
+    const bootstrap = mission.bootstrapArtifactId
+      ? this.getArtifact(mission.bootstrapArtifactId)
+      : null;
+
+    return {
+      ...mission,
+      authorityContext: {
+        executionAuthority: mission.executionAuthority || 'CLAUDE_CODE',
+        executionMode: mission.executionMode || 'RECIPE_ONLY',
+        delegationRequired: mission.executionAuthority === 'CLAUDE_CODE',
+        bootstrap: bootstrap?.payload || null
+      }
+    };
+  }
+
+  /**
+   * V8: Check if caller can execute for mission
+   */
+  checkExecutionPermission(missionId, caller) {
+    const mission = this.getMission(missionId);
+    if (!mission) {
+      return { allowed: false, reason: 'Mission not found' };
+    }
+
+    const authority = mission.executionAuthority || 'CLAUDE_CODE';
+
+    if (authority === 'CLAUDE_CODE' && caller === 'DESKTOP') {
+      return {
+        allowed: false,
+        reason: 'Mission requires CLAUDE_CODE execution authority'
+      };
+    }
+
+    return { allowed: true };
+  }
+
+  /**
+   * V8: Get all execution violations for a mission
+   */
+  getExecutionViolations(missionId) {
+    return Object.values(this.state.artifacts)
+      .filter(a => a.missionId === missionId && a.type === 'execution_violation')
+      .map(a => structuredClone(a));
+  }
+
+  /**
+   * V8: Get violation count
+   */
+  getViolationCount() {
+    return this.executionViolations.length;
   }
 }
 

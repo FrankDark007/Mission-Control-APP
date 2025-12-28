@@ -16,7 +16,7 @@ export class MissionQueue {
         this.queue = [];
         this.history = [];
         this.maxConcurrency = 4;
-        this.dbPath = join(process.cwd(), 'ops/missions.json');
+        this.dbPath = join(process.cwd(), 'missions.json');
         this.loadHistory();
     }
 
@@ -43,6 +43,8 @@ export class MissionQueue {
     addTask(task) {
         const newTask = {
             id: task.id || Date.now() + Math.floor(Math.random() * 1000),
+            name: task.name || task.task || task.taskName || 'Unnamed Task',
+            type: task.type || task.taskType || 'general',
             status: 'pending',
             created: new Date().toISOString(),
             dependencies: task.dependencies || [],

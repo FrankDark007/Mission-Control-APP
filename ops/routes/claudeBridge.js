@@ -219,6 +219,23 @@ router.get('/inbox', (req, res) => {
 });
 
 /**
+ * Clear all tasks from the inbox
+ * Optionally filter by projectId or status
+ */
+router.delete('/inbox', (req, res) => {
+  try {
+    const { projectId, status } = req.query;
+    const result = claudeCodeBridge.clearAllTasks({
+      projectId: projectId || undefined,
+      status: status || undefined
+    });
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
  * Get all tasks (with filters)
  */
 router.get('/tasks', (req, res) => {
@@ -437,6 +454,191 @@ router.get('/bridge-status', (req, res) => {
   try {
     const status = claudeCodeBridge.getStatus();
     res.json({ success: true, status });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PROJECT FOLDER ROUTES - Artifact organization by project
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Get all project folders
+ */
+router.get('/projects', (req, res) => {
+  try {
+    const result = claudeCodeBridge.getProjectFolders();
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * Get project folder structure and contents
+ */
+router.get('/projects/:projectId', (req, res) => {
+  try {
+    const result = claudeCodeBridge.getProjectFolders(req.params.projectId);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * Migrate existing artifacts to project folders
+ */
+router.post('/projects/migrate', (req, res) => {
+  try {
+    const result = claudeCodeBridge.migrateArtifactsToProjectFolders();
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * Read artifact content from file
+ */
+router.get('/artifact/:artifactId/content', (req, res) => {
+  try {
+    const result = claudeCodeBridge.readArtifactContent(req.params.artifactId);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// V8: TASK EXECUTION ROUTES
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Prepare a task for execution
+ * Returns the full task instructions for Claude Code to execute
+ */
+router.post('/tasks/:taskId/execute', (req, res) => {
+  try {
+    const task = claudeCodeBridge.getTask(req.params.taskId);
+    if (!task) {
+      return res.status(404).json({ success: false, error: 'Task not found' });
+    }
+
+    // Mark task as acknowledged if pending
+    if (task.status === 'pending') {
+      claudeCodeBridge.acknowledgeTask(req.params.taskId);
+    }
+
+    // Get all artifacts associated with this task
+    const artifacts = claudeCodeBridge.getArtifacts(task.projectId, {
+      unused: false
+    });
+
+    // Filter artifacts that are relevant to this task
+    const taskArtifacts = artifacts.filter(a =>
+      a.taskId === task.id ||
+      (task.context?.artifactIds || []).includes(a.id)
+    );
+
+    // Build execution context
+    const executionContext = {
+      task: {
+        id: task.id,
+        title: task.title,
+        instructions: task.instructions,
+        priority: task.priority,
+        createdBy: task.createdBy,
+        createdByModel: task.createdByModel,
+        context: task.context
+      },
+      artifacts: taskArtifacts.map(a => ({
+        id: a.id,
+        type: a.type,
+        name: a.name,
+        description: a.description,
+        filePath: a.filePath,
+        instructions: a.instructions
+      })),
+      acceptanceCriteria: task.context?.acceptanceCriteria || [],
+      readyForExecution: true,
+      acknowledgedAt: new Date().toISOString()
+    };
+
+    res.json({
+      success: true,
+      execution: executionContext,
+      message: `Task "${task.title}" is ready for execution`
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * Get execution-ready instructions for a task
+ * This is what gets displayed in the Builder tab
+ */
+router.get('/tasks/:taskId/instructions', (req, res) => {
+  try {
+    const task = claudeCodeBridge.getTask(req.params.taskId);
+    if (!task) {
+      return res.status(404).json({ success: false, error: 'Task not found' });
+    }
+
+    // Build a formatted instruction block for Claude Code
+    let instructions = `# Task: ${task.title}\n\n`;
+    instructions += `## Instructions\n${task.instructions}\n\n`;
+
+    if (task.context?.acceptanceCriteria?.length > 0) {
+      instructions += `## Acceptance Criteria\n`;
+      task.context.acceptanceCriteria.forEach((criteria, i) => {
+        instructions += `${i + 1}. ${criteria}\n`;
+      });
+      instructions += '\n';
+    }
+
+    if (task.context?.phase) {
+      instructions += `## Phase\n${task.context.phase}\n\n`;
+    }
+
+    // Get related artifacts
+    const artifacts = claudeCodeBridge.getArtifacts(task.projectId, { unused: false });
+    const taskArtifacts = artifacts.filter(a =>
+      a.taskId === task.id ||
+      (task.context?.artifactIds || []).includes(a.id)
+    );
+
+    if (taskArtifacts.length > 0) {
+      instructions += `## Available Artifacts\n`;
+      taskArtifacts.forEach(a => {
+        instructions += `- **${a.name}** (${a.type}): ${a.description || 'No description'}\n`;
+        if (a.filePath) {
+          instructions += `  - File: ${a.filePath}\n`;
+        }
+        if (a.instructions) {
+          instructions += `  - Instructions: ${a.instructions}\n`;
+        }
+      });
+      instructions += '\n';
+    }
+
+    instructions += `## Metadata\n`;
+    instructions += `- Created by: ${task.createdByModel || task.createdBy}\n`;
+    instructions += `- Priority: ${task.priority}\n`;
+    instructions += `- Task ID: ${task.id}\n`;
+
+    res.json({
+      success: true,
+      taskId: task.id,
+      title: task.title,
+      instructions,
+      raw: {
+        task,
+        artifacts: taskArtifacts
+      }
+    });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }

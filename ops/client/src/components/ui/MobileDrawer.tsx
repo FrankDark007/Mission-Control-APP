@@ -2,8 +2,8 @@ import React, { useEffect } from 'react';
 import {
     X, LayoutDashboard, BarChart3, Kanban, Hammer, Layout,
     Gauge, Brain, MessageSquare, BrainCircuit, Cpu, Cloud,
-    BookOpen, ListTree, Swords, Radio, Sparkles, ShieldAlert,
-    Bot, Gavel, GitBranch, Globe, Settings, Home, Crosshair, Activity
+    BookOpen, ListTree, Radio, Sparkles, ShieldAlert,
+    Bot, Gavel, GitBranch, Globe, Settings, Home, Crosshair, Activity, Search, Users
 } from 'lucide-react';
 
 interface MobileDrawerProps {
@@ -13,61 +13,62 @@ interface MobileDrawerProps {
     onTabChange: (tab: string) => void;
 }
 
-// Navigation groups with their tabs
+// Navigation groups matching desktop sidebar
 const navGroups = [
     {
-        name: 'Core',
+        name: 'Mission Control',
         tabs: [
             { id: 'home', icon: Home, label: 'Home' },
+            { id: 'swarm', icon: Kanban, label: 'Projects' },
             { id: 'dashboard', icon: LayoutDashboard, label: 'Dashboard' },
             { id: 'analytics', icon: BarChart3, label: 'Analytics' },
-            { id: 'swarm', icon: Kanban, label: 'Swarm Board' },
         ]
     },
     {
-        name: 'Build',
+        name: 'Strategy Lab',
+        tabs: [
+            { id: 'chat', icon: MessageSquare, label: 'Director Chat' },
+            { id: 'consensus', icon: Users, label: 'War Room' },
+            { id: 'briefing', icon: Radio, label: 'Briefing' },
+            { id: 'strategy', icon: BookOpen, label: 'Prompts' },
+        ]
+    },
+    {
+        name: 'Build Lab',
         tabs: [
             { id: 'builder', icon: Hammer, label: 'Builder' },
+            { id: 'creative', icon: Sparkles, label: 'Creative' },
             { id: 'visual', icon: Layout, label: 'Visual Diff' },
+            { id: 'protocols', icon: ListTree, label: 'Protocols' },
+        ]
+    },
+    {
+        name: 'Research Lab',
+        tabs: [
+            { id: 'intelligence', icon: Bot, label: 'Intelligence' },
+            { id: 'seo', icon: Globe, label: 'SEO Tools' },
+            { id: 'serp', icon: Search, label: 'SERP Monitor' },
+        ]
+    },
+    {
+        name: 'QA Suite',
+        tabs: [
             { id: 'sentinel', icon: Crosshair, label: 'Sentinel' },
             { id: 'lighthouse', icon: Gauge, label: 'Lighthouse' },
-            { id: 'git', icon: GitBranch, label: 'Git Pulse' },
-        ]
-    },
-    {
-        name: 'AI',
-        tabs: [
-            { id: 'chat', icon: MessageSquare, label: 'Chat' },
-            { id: 'models', icon: Settings, label: 'Models' },
-            { id: 'localai', icon: Cpu, label: 'Local AI' },
-            { id: 'sandbox', icon: BrainCircuit, label: 'Sandbox' },
-            { id: 'strategy', icon: BookOpen, label: 'Strategy' },
-        ]
-    },
-    {
-        name: 'Monitoring',
-        tabs: [
-            { id: 'memory', icon: Brain, label: 'Memory' },
-            { id: 'signal', icon: Activity, label: 'Signal' },
-            { id: 'edge', icon: Cloud, label: 'Edge' },
-        ]
-    },
-    {
-        name: 'Security',
-        tabs: [
-            { id: 'security', icon: ShieldAlert, label: 'Security' },
-            { id: 'intelligence', icon: Bot, label: 'Intelligence' },
             { id: 'qa', icon: Gavel, label: 'QA Critic' },
+            { id: 'security', icon: ShieldAlert, label: 'Security' },
         ]
     },
     {
-        name: 'Workflow',
+        name: 'System',
         tabs: [
-            { id: 'protocols', icon: ListTree, label: 'Protocols' },
-            { id: 'consensus', icon: Swords, label: 'Consensus' },
-            { id: 'briefing', icon: Radio, label: 'Briefing' },
-            { id: 'creative', icon: Sparkles, label: 'Creative' },
-            { id: 'seo', icon: Globe, label: 'SEO' },
+            { id: 'models', icon: Settings, label: 'Models' },
+            { id: 'memory', icon: Brain, label: 'Memory' },
+            { id: 'sandbox', icon: BrainCircuit, label: 'Sandbox' },
+            { id: 'localai', icon: Cpu, label: 'Local AI' },
+            { id: 'edge', icon: Cloud, label: 'Edge' },
+            { id: 'signal', icon: Activity, label: 'Signal' },
+            { id: 'git', icon: GitBranch, label: 'Git Pulse' },
         ]
     }
 ];
@@ -117,13 +118,13 @@ const MobileDrawer: React.FC<MobileDrawerProps> = ({ isOpen, onClose, activeTab,
                 </div>
 
                 {/* Navigation Groups */}
-                <nav className="flex-1 overflow-y-auto p-4 space-y-6 pb-safe">
+                <nav className="flex-1 overflow-y-auto p-4 space-y-5 pb-safe">
                     {navGroups.map((group) => (
                         <div key={group.name}>
                             <h3 className="text-[9px] font-black uppercase tracking-[0.2em] text-gray-600 px-3 mb-2">
                                 {group.name}
                             </h3>
-                            <div className="space-y-1">
+                            <div className="space-y-0.5">
                                 {group.tabs.map((tab) => (
                                     <button
                                         key={tab.id}
@@ -134,8 +135,8 @@ const MobileDrawer: React.FC<MobileDrawerProps> = ({ isOpen, onClose, activeTab,
                                                 : 'hover:bg-dark-700 text-gray-400'
                                         }`}
                                     >
-                                        <tab.icon size={18} />
-                                        <span className="text-sm font-semibold">{tab.label}</span>
+                                        <tab.icon size={16} />
+                                        <span className="text-xs font-semibold">{tab.label}</span>
                                     </button>
                                 ))}
                             </div>
