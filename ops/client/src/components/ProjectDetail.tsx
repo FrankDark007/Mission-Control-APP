@@ -7,11 +7,12 @@ import React, { useState, useMemo } from 'react';
 import { Socket } from 'socket.io-client';
 import {
   ArrowLeft, RefreshCw, Play, Loader2, CheckCircle2, XCircle,
-  Clock, AlertTriangle, FileText, X, Eye
+  Clock, AlertTriangle, FileText, X, Eye, Upload, ChevronDown
 } from 'lucide-react';
 import { Artifact } from '../types';
 import { useProjectTree } from '../services/useProjectTree';
 import PhaseSection from './PhaseSection';
+import FileUpload from './FileUpload';
 
 interface ProjectDetailProps {
   projectId: string;
@@ -32,6 +33,7 @@ const ProjectDetail: React.FC<ProjectDetailProps> = ({
   const [selectedArtifact, setSelectedArtifact] = useState<Artifact | null>(null);
   const [artifactContent, setArtifactContent] = useState<string | null>(null);
   const [loadingArtifact, setLoadingArtifact] = useState(false);
+  const [showUpload, setShowUpload] = useState(false);
 
   // Calculate overall project stats
   const projectStats = useMemo(() => {
@@ -226,6 +228,41 @@ const ProjectDetail: React.FC<ProjectDetailProps> = ({
           </div>
         </div>
       )}
+
+      {/* File Upload Section */}
+      <div className="bg-dark-800 border border-dark-700 rounded-xl overflow-hidden">
+        <button
+          onClick={() => setShowUpload(!showUpload)}
+          className="w-full flex items-center justify-between p-4 hover:bg-dark-700/50 transition-colors"
+        >
+          <div className="flex items-center gap-3">
+            <Upload size={18} className="text-google-blue" />
+            <span className="font-medium text-white">Upload Files</span>
+            <span className="text-xs text-gray-500">
+              Upload website files, assets, or documents for AI analysis
+            </span>
+          </div>
+          <ChevronDown
+            size={18}
+            className={`text-gray-400 transition-transform ${showUpload ? 'rotate-180' : ''}`}
+          />
+        </button>
+        {showUpload && (
+          <div className="p-4 border-t border-dark-700">
+            <FileUpload
+              projectId={projectId}
+              onUploadComplete={(upload) => {
+                console.log('Upload complete:', upload);
+                refetch(); // Refresh to show new artifacts
+              }}
+              onAnalysisComplete={(result) => {
+                console.log('Analysis complete:', result);
+                refetch(); // Refresh to show new artifacts
+              }}
+            />
+          </div>
+        )}
+      </div>
 
       {/* Phases */}
       <div className="space-y-4">

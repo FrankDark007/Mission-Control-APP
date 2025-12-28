@@ -40,6 +40,8 @@ import { directorEngine } from './services/directorEngine.js';
 import { sentinelAgent } from './services/sentinelAgent.js';
 import sentinelRouter from './routes/sentinel.js';
 import skillsRouter from './routes/skills.js';
+import { createUploadRouter } from './routes/uploads.js';
+import { uploadService } from './services/uploadService.js';
 import taskService from './services/taskService.js';
 import artifactService from './services/artifactService.js';
 
@@ -380,6 +382,10 @@ app.use('/api', restoredRouter);
 app.use('/api/claude', claudeBridgeRouter);
 app.use('/api/sentinel', sentinelRouter);
 app.use('/api/skills', skillsRouter);
+
+// Upload routes with dependencies
+const uploadRouter = createUploadRouter({ callAI, integrations, artifactService, projectService, agentManager, io });
+app.use('/api/uploads', uploadRouter);
 
 
 // Initialize State Store
