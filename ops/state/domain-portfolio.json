@@ -1,0 +1,667 @@
+{
+  "_stateVersion": 1,
+  "_lastUpdated": "2026-01-05T05:45:00Z",
+  "categories": {
+    "primary": {
+      "name": "Primary Brand",
+      "description": "Main Flood Doctor properties"
+    },
+    "water-damage": {
+      "name": "Water Damage Network",
+      "description": "Geo-targeted water damage domains for PBN/satellite content"
+    },
+    "restoration": {
+      "name": "Restoration Network",
+      "description": "General restoration and competitor-adjacent domains"
+    },
+    "personal": {
+      "name": "Personal/Family",
+      "description": "Darakhshan family domains"
+    },
+    "other-business": {
+      "name": "Other Business",
+      "description": "Non-flood related business domains"
+    },
+    "parked": {
+      "name": "Parked/Unused",
+      "description": "Registered but not actively used"
+    }
+  },
+  "domains": [
+    {
+      "domain": "flood.doctor",
+      "category": "primary",
+      "status": "active",
+      "platform": "react",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 9,
+      "traffic": "13.18k",
+      "purpose": "Main brand website",
+      "priority": "P0"
+    },
+    {
+      "domain": "flooddoctorva.com",
+      "category": "primary",
+      "status": "active",
+      "platform": "react",
+      "cloudflare": true,
+      "plan": "Pro",
+      "dnsRecords": 10,
+      "traffic": "48.19k",
+      "purpose": "Virginia location hub - highest traffic",
+      "priority": "P0"
+    },
+    {
+      "domain": "flooddoctor.us",
+      "category": "primary",
+      "status": "active",
+      "platform": "unknown",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 5,
+      "traffic": "1.38k",
+      "purpose": "Alternate TLD",
+      "priority": "P1"
+    },
+    {
+      "domain": "flood.repair",
+      "category": "water-damage",
+      "status": "active",
+      "platform": "unknown",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 9,
+      "traffic": "8.83k",
+      "purpose": "Generic flood repair - high value keyword domain",
+      "priority": "P0",
+      "blogPotential": true
+    },
+    {
+      "domain": "floodrepair.org",
+      "category": "water-damage",
+      "status": "active",
+      "platform": "unknown",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 4,
+      "traffic": "7.97k",
+      "purpose": "Educational flood repair content",
+      "priority": "P1",
+      "blogPotential": true
+    },
+    {
+      "domain": "basementflood.repair",
+      "category": "water-damage",
+      "status": "active",
+      "platform": "unknown",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 5,
+      "traffic": "3.69k",
+      "purpose": "Basement-specific flood content",
+      "priority": "P1",
+      "blogPotential": true
+    },
+    {
+      "domain": "vawaterdamage.com",
+      "category": "water-damage",
+      "status": "active",
+      "platform": "unknown",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 5,
+      "traffic": "5.28k",
+      "purpose": "Virginia water damage geo-target",
+      "priority": "P0",
+      "blogPotential": true
+    },
+    {
+      "domain": "dcwaterdamage.co",
+      "category": "water-damage",
+      "status": "active",
+      "platform": "unknown",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 3,
+      "traffic": "3.31k",
+      "purpose": "DC water damage geo-target",
+      "priority": "P1",
+      "blogPotential": true
+    },
+    {
+      "domain": "dcwaterdamage.services",
+      "category": "water-damage",
+      "status": "active",
+      "platform": "unknown",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 3,
+      "traffic": "2.02k",
+      "purpose": "DC water damage services",
+      "priority": "P2"
+    },
+    {
+      "domain": "dmvwaterdamage.com",
+      "category": "water-damage",
+      "status": "active",
+      "platform": "unknown",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 3,
+      "traffic": "2.38k",
+      "purpose": "DMV region water damage",
+      "priority": "P1",
+      "blogPotential": true
+    },
+    {
+      "domain": "mdwaterdamage.com",
+      "category": "water-damage",
+      "status": "active",
+      "platform": "unknown",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 3,
+      "traffic": "4.7k",
+      "purpose": "Maryland water damage geo-target",
+      "priority": "P0",
+      "blogPotential": true
+    },
+    {
+      "domain": "waterdamage.cc",
+      "category": "water-damage",
+      "status": "active",
+      "platform": "unknown",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 6,
+      "traffic": "5.69k",
+      "purpose": "Generic water damage - high value",
+      "priority": "P0",
+      "blogPotential": true
+    },
+    {
+      "domain": "waterdamageprocess.com",
+      "category": "water-damage",
+      "status": "active",
+      "platform": "unknown",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 5,
+      "traffic": "2.99k",
+      "purpose": "Educational content about water damage process",
+      "priority": "P1",
+      "blogPotential": true
+    },
+    {
+      "domain": "waterdamagerepairdc.com",
+      "category": "water-damage",
+      "status": "active",
+      "platform": "unknown",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 4,
+      "traffic": "3.83k",
+      "purpose": "DC repair services",
+      "priority": "P1",
+      "blogPotential": true
+    },
+    {
+      "domain": "waterdamagerepairva.com",
+      "category": "water-damage",
+      "status": "active",
+      "platform": "unknown",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 3,
+      "traffic": "2.15k",
+      "purpose": "VA repair services",
+      "priority": "P1",
+      "blogPotential": true
+    },
+    {
+      "domain": "waterrestoration.info",
+      "category": "water-damage",
+      "status": "active",
+      "platform": "unknown",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 5,
+      "traffic": "1.44k",
+      "purpose": "Educational restoration info",
+      "priority": "P2",
+      "blogPotential": true
+    },
+    {
+      "domain": "residentialwaterdamage.com",
+      "category": "water-damage",
+      "status": "active",
+      "platform": "unknown",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 3,
+      "traffic": "2",
+      "purpose": "Residential focus - needs development",
+      "priority": "P2",
+      "blogPotential": true
+    },
+    {
+      "domain": "waterdamage.cleaning",
+      "category": "water-damage",
+      "status": "parked",
+      "platform": "none",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 3,
+      "traffic": "1",
+      "purpose": "Future use",
+      "priority": "P3"
+    },
+    {
+      "domain": "waterdamagerestoration.cc",
+      "category": "water-damage",
+      "status": "parked",
+      "platform": "none",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 3,
+      "traffic": "1",
+      "purpose": "Future use",
+      "priority": "P3"
+    },
+    {
+      "domain": "restorationdoctor.com",
+      "category": "restoration",
+      "status": "active",
+      "platform": "unknown",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 13,
+      "traffic": "2.43k",
+      "purpose": "General restoration brand",
+      "priority": "P1",
+      "blogPotential": true
+    },
+    {
+      "domain": "restorationdoctorllc.com",
+      "category": "restoration",
+      "status": "parked",
+      "platform": "none",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 3,
+      "traffic": "1",
+      "purpose": "LLC variant - redirect",
+      "priority": "P3"
+    },
+    {
+      "domain": "restorationservicesva.com",
+      "category": "restoration",
+      "status": "parked",
+      "platform": "none",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 3,
+      "traffic": "2",
+      "purpose": "VA restoration - redirect potential",
+      "priority": "P3"
+    },
+    {
+      "domain": "a1flood.tech",
+      "category": "restoration",
+      "status": "active",
+      "platform": "unknown",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 3,
+      "traffic": "1.16k",
+      "purpose": "Tech/tools focused content",
+      "priority": "P2",
+      "blogPotential": true
+    },
+    {
+      "domain": "dc.contractors",
+      "category": "restoration",
+      "status": "active",
+      "platform": "unknown",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 4,
+      "traffic": "7.29k",
+      "purpose": "DC contractor directory - high traffic",
+      "priority": "P0",
+      "blogPotential": true
+    },
+    {
+      "domain": "servpro.services",
+      "category": "restoration",
+      "status": "active",
+      "platform": "unknown",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 3,
+      "traffic": "1.61k",
+      "purpose": "Competitor comparison content",
+      "priority": "P2",
+      "notes": "Legal risk - trademark"
+    },
+    {
+      "domain": "servpro.claims",
+      "category": "restoration",
+      "status": "parked",
+      "platform": "none",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 3,
+      "traffic": "1",
+      "purpose": "Competitor comparison",
+      "priority": "P3",
+      "notes": "Legal risk - trademark"
+    },
+    {
+      "domain": "servprova.com",
+      "category": "restoration",
+      "status": "parked",
+      "platform": "none",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 3,
+      "traffic": "0",
+      "purpose": "Competitor comparison",
+      "priority": "P3",
+      "notes": "Legal risk - trademark"
+    },
+    {
+      "domain": "puroclean.services",
+      "category": "restoration",
+      "status": "parked",
+      "platform": "none",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 3,
+      "traffic": "1",
+      "purpose": "Competitor comparison",
+      "priority": "P3",
+      "notes": "Legal risk - trademark"
+    },
+    {
+      "domain": "vaserv.pro",
+      "category": "restoration",
+      "status": "parked",
+      "platform": "none",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 3,
+      "traffic": "1",
+      "purpose": "VA services",
+      "priority": "P3"
+    },
+    {
+      "domain": "faroughdarakhshan.com",
+      "category": "personal",
+      "status": "active",
+      "platform": "unknown",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 3,
+      "traffic": "5.06k",
+      "purpose": "Personal site",
+      "priority": "P2"
+    },
+    {
+      "domain": "faroughdarakhshan.org",
+      "category": "personal",
+      "status": "active",
+      "platform": "unknown",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 3,
+      "traffic": "3.61k",
+      "purpose": "Personal site variant",
+      "priority": "P3"
+    },
+    {
+      "domain": "faroughdarakhshan.us",
+      "category": "personal",
+      "status": "active",
+      "platform": "unknown",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 3,
+      "traffic": "3.62k",
+      "purpose": "Personal site variant",
+      "priority": "P3"
+    },
+    {
+      "domain": "fdarakhshan.com",
+      "category": "personal",
+      "status": "active",
+      "platform": "unknown",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 3,
+      "traffic": "4.78k",
+      "purpose": "Short personal domain",
+      "priority": "P3"
+    },
+    {
+      "domain": "frankdarakhshan.com",
+      "category": "personal",
+      "status": "active",
+      "platform": "unknown",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 3,
+      "traffic": "4.32k",
+      "purpose": "Personal site",
+      "priority": "P3"
+    },
+    {
+      "domain": "fouzidarakhshan.com",
+      "category": "personal",
+      "status": "active",
+      "platform": "unknown",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 8,
+      "traffic": "1.05k",
+      "purpose": "Family member site",
+      "priority": "P3"
+    },
+    {
+      "domain": "darakhshan.co",
+      "category": "personal",
+      "status": "registered",
+      "cloudflare": false,
+      "purpose": "Family domain",
+      "priority": "P3"
+    },
+    {
+      "domain": "darakhshan.info",
+      "category": "personal",
+      "status": "registered",
+      "cloudflare": false,
+      "purpose": "Family domain",
+      "priority": "P3"
+    },
+    {
+      "domain": "darakhshan.net",
+      "category": "personal",
+      "status": "registered",
+      "cloudflare": false,
+      "purpose": "Family domain",
+      "priority": "P3"
+    },
+    {
+      "domain": "darakhshan.org",
+      "category": "personal",
+      "status": "registered",
+      "cloudflare": false,
+      "purpose": "Family domain",
+      "priority": "P3"
+    },
+    {
+      "domain": "daviddarakhshan.com",
+      "category": "personal",
+      "status": "registered",
+      "cloudflare": false,
+      "purpose": "Family member",
+      "priority": "P3"
+    },
+    {
+      "domain": "foaddarakhshan.com",
+      "category": "personal",
+      "status": "registered",
+      "cloudflare": false,
+      "purpose": "Family member",
+      "priority": "P3"
+    },
+    {
+      "domain": "shoghidarakhshan.com",
+      "category": "personal",
+      "status": "registered",
+      "cloudflare": false,
+      "purpose": "Family member",
+      "priority": "P3"
+    },
+    {
+      "domain": "filiault.law",
+      "category": "other-business",
+      "status": "active",
+      "platform": "unknown",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 8,
+      "traffic": "2.51k",
+      "purpose": "Law firm website",
+      "priority": "P1"
+    },
+    {
+      "domain": "filiaultlaw.com",
+      "category": "other-business",
+      "status": "active",
+      "platform": "unknown",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 7,
+      "traffic": "1",
+      "purpose": "Law firm redirect",
+      "priority": "P2"
+    },
+    {
+      "domain": "starlabs.bio",
+      "category": "other-business",
+      "status": "active",
+      "platform": "unknown",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 10,
+      "traffic": "8.65k",
+      "purpose": "StarLabs business",
+      "priority": "P1"
+    },
+    {
+      "domain": "bluemediadc.com",
+      "category": "other-business",
+      "status": "active",
+      "platform": "unknown",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 14,
+      "traffic": "1.9k",
+      "purpose": "Media company",
+      "priority": "P2"
+    },
+    {
+      "domain": "iircr.org",
+      "category": "other-business",
+      "status": "active",
+      "platform": "unknown",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 3,
+      "traffic": "1.59k",
+      "purpose": "Organization",
+      "priority": "P2"
+    },
+    {
+      "domain": "odapm.org",
+      "category": "other-business",
+      "status": "active",
+      "platform": "unknown",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 3,
+      "traffic": "1.01k",
+      "purpose": "Organization",
+      "priority": "P2"
+    },
+    {
+      "domain": "galaxy.construction",
+      "category": "other-business",
+      "status": "registered",
+      "cloudflare": false,
+      "purpose": "Construction business",
+      "priority": "P2"
+    },
+    {
+      "domain": "tysons.rent",
+      "category": "other-business",
+      "status": "parked",
+      "platform": "none",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 3,
+      "traffic": "1",
+      "purpose": "Real estate",
+      "priority": "P3"
+    },
+    {
+      "domain": "tysons.rentals",
+      "category": "other-business",
+      "status": "parked",
+      "platform": "none",
+      "cloudflare": true,
+      "plan": "Free",
+      "dnsRecords": 3,
+      "traffic": "1",
+      "purpose": "Real estate",
+      "priority": "P3"
+    }
+  ],
+  "networkStrategy": {
+    "hub": "flood.doctor",
+    "spokes": [
+      "flooddoctorva.com",
+      "vawaterdamage.com",
+      "mdwaterdamage.com",
+      "dcwaterdamage.co"
+    ],
+    "satellites": [
+      "flood.repair",
+      "waterdamage.cc",
+      "dc.contractors",
+      "basementflood.repair",
+      "dmvwaterdamage.com"
+    ],
+    "interlinkingRules": {
+      "hubToSpoke": "contextual footer + service pages",
+      "spokeToHub": "header logo + about page",
+      "satelliteToHub": "resource links + author bios",
+      "crossSpoke": "local service area overlaps only"
+    }
+  },
+  "statistics": {
+    "totalDomains": 50,
+    "activeInCloudflare": 43,
+    "withTraffic": 35,
+    "blogPotential": 18,
+    "categories": {
+      "primary": 3,
+      "water-damage": 19,
+      "restoration": 10,
+      "personal": 14,
+      "other-business": 10
+    }
+  }
+}
